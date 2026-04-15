@@ -32,29 +32,32 @@ Si aucun animal n'est visible ou reconnaissable dans l'image, retourne uniquemen
 {"isAnimal": false}
 `.trim()
 
-const MODELS = [
-  'gemini-2.0-flash-lite',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash-latest',
-  'gemini-1.5-flash-8b',
-  'gemini-1.5-pro-latest',
+// Modèles vision gratuits sur OpenRouter (marqués :free)
+const FREE_MODELS = [
+  'google/gemini-2.0-flash-exp:free',
+  'qwen/qwen-2.5-vl-72b-instruct:free',
+  'meta-llama/llama-3.2-11b-vision-instruct:free',
+  'mistralai/pixtral-12b:free',
 ]
 
-async function callGemini(apiKey, model, base64Image, mimeType) {
-  const url =
-    `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${apiKey}`
-
-  const res = await fetch(url, {
+async function callOpenRouter(apiKey, model, base64Image, mimeType) {
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'X-Title': 'BugOdex',
+    },
     body: JSON.stringify({
-      contents: [{
-        parts: [
-          { inline_data: { mime_type: mimeType, data: base64Image } },
-          { text: PROMPT },
+      model,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } },
+          { type: 'text', text: PROMPT },
         ],
       }],
-      generationConfig: { temperature: 0.2 },
+      temperature: 0.2,
     }),
   })
 
@@ -64,11 +67,10 @@ async function callGemini(apiKey, model, base64Image, mimeType) {
     const msg = payload?.error?.message ?? `HTTP ${res.status}`
     const err = new Error(msg)
     err.status = res.status
-    err.payload = payload
     throw err
   }
 
-  return payload?.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+  return payload?.choices?.[0]?.message?.content ?? ''
 }
 
 export default async function handler(req, res) {
@@ -79,23 +81,22 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
-  const apiKey = process.env.GOOGLE_AI_KEY
+  const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) return res.status(500).json({ error: 'NO_API_KEY' })
 
   const { base64Image, mimeType = 'image/jpeg' } = req.body ?? {}
   if (!base64Image) return res.status(400).json({ error: 'Missing base64Image' })
 
-  const models = process.env.AI_MODEL ? [process.env.AI_MODEL] : MODELS
+  const models = process.env.AI_MODEL ? [process.env.AI_MODEL] : FREE_MODELS
   const attempts = []
 
   for (const model of models) {
     let text = ''
     try {
-      text = await callGemini(apiKey, model, base64Image, mimeType)
-    } catch (httpErr) {
-      attempts.push({ model, error: httpErr.message, status: httpErr.status })
-      console.error(`[${model}] HTTP ${httpErr.status}: ${httpErr.message}`)
-      // Toujours essayer le modèle suivant
+      text = await callOpenRouter(apiKey, model, base64Image, mimeType)
+    } catch (err) {
+      attempts.push({ model, error: err.message, status: err.status })
+      console.error(`[${model}] ${err.status ?? ''}: ${err.message}`)
       continue
     }
 
@@ -105,28 +106,22 @@ export default async function handler(req, res) {
       continue
     }
 
-    // Parse JSON
     let parsed
     try {
       const cleaned = text.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
       parsed = JSON.parse(cleaned)
     } catch {
-      attempts.push({ model, error: `JSON parse failed: ${text.slice(0, 120)}` })
-      console.error(`[${model}] JSON parse failed:`, text.slice(0, 120))
+      attempts.push({ model, error: `JSON parse failed: ${text.slice(0, 100)}` })
+      console.error(`[${model}] JSON parse failed:`, text.slice(0, 100))
       continue
     }
 
-    if (!parsed.isAnimal) {
-      return res.status(422).json({ error: 'NOT_AN_ANIMAL' })
-    }
+    if (!parsed.isAnimal) return res.status(422).json({ error: 'NOT_AN_ANIMAL' })
 
+    console.log(`[${model}] Success:`, parsed.scientificName)
     return res.status(200).json({ ...parsed, _model: model })
   }
 
-  // Tous les modèles ont échoué
   console.error('All models failed:', JSON.stringify(attempts))
-  return res.status(500).json({
-    error: 'ALL_MODELS_FAILED',
-    attempts,
-  })
+  return res.status(500).json({ error: 'ALL_MODELS_FAILED', attempts })
 }
