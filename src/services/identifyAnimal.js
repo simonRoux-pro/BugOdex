@@ -45,7 +45,7 @@ export async function identifyAnimal(base64Image, mimeType = 'image/jpeg') {
     dangerouslyAllowBrowser: true,
   })
 
-  const model = import.meta.env.VITE_AI_MODEL ?? 'claude-opus-4-6'
+  const model = import.meta.env.VITE_AI_MODEL
   const response = await client.messages.create({
     model,
     max_tokens: 1024,
