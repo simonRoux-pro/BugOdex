@@ -41,32 +41,34 @@ const MODELS = [
 ]
 
 async function callGemini(apiKey, model, base64Image, mimeType) {
-  const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${apiKey}`
-  const body = {
-    contents: [{
-      parts: [
-        { inline_data: { mime_type: mimeType, data: base64Image } },
-        { text: PROMPT },
-      ],
-    }],
-    generationConfig: { temperature: 0.2 },
-  }
+  const url =
+    `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${apiKey}`
 
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      contents: [{
+        parts: [
+          { inline_data: { mime_type: mimeType, data: base64Image } },
+          { text: PROMPT },
+        ],
+      }],
+      generationConfig: { temperature: 0.2 },
+    }),
   })
 
+  const payload = await res.json().catch(() => null)
+
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    const status = res.status
-    const msg = err?.error?.message ?? res.statusText
-    throw Object.assign(new Error(msg), { status, raw: err })
+    const msg = payload?.error?.message ?? `HTTP ${res.status}`
+    const err = new Error(msg)
+    err.status = res.status
+    err.payload = payload
+    throw err
   }
 
-  const data = await res.json()
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+  return payload?.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
 }
 
 export default async function handler(req, res) {
@@ -84,32 +86,47 @@ export default async function handler(req, res) {
   if (!base64Image) return res.status(400).json({ error: 'Missing base64Image' })
 
   const models = process.env.AI_MODEL ? [process.env.AI_MODEL] : MODELS
-  let lastErr = null
+  const attempts = []
 
   for (const model of models) {
+    let text = ''
     try {
-      const raw = await callGemini(apiKey, model, base64Image, mimeType)
-      const cleaned = raw.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
-      const parsed = JSON.parse(cleaned)
-
-      if (!parsed.isAnimal) return res.status(422).json({ error: 'NOT_AN_ANIMAL' })
-      return res.status(200).json({ ...parsed, _model: model })
-    } catch (err) {
-      lastErr = err
-      // 404 = modèle absent, 429 limit 0 = pas de quota → essaie le suivant
-      if (err.status === 404 || (err.status === 429 && JSON.stringify(err.raw).includes('limit: 0'))) {
-        continue
-      }
-      break
+      text = await callGemini(apiKey, model, base64Image, mimeType)
+    } catch (httpErr) {
+      attempts.push({ model, error: httpErr.message, status: httpErr.status })
+      console.error(`[${model}] HTTP ${httpErr.status}: ${httpErr.message}`)
+      // Toujours essayer le modèle suivant
+      continue
     }
+
+    if (!text) {
+      attempts.push({ model, error: 'empty response' })
+      console.error(`[${model}] Empty response`)
+      continue
+    }
+
+    // Parse JSON
+    let parsed
+    try {
+      const cleaned = text.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
+      parsed = JSON.parse(cleaned)
+    } catch {
+      attempts.push({ model, error: `JSON parse failed: ${text.slice(0, 120)}` })
+      console.error(`[${model}] JSON parse failed:`, text.slice(0, 120))
+      continue
+    }
+
+    if (!parsed.isAnimal) {
+      return res.status(422).json({ error: 'NOT_AN_ANIMAL' })
+    }
+
+    return res.status(200).json({ ...parsed, _model: model })
   }
 
-  const msg = lastErr?.message ?? 'Unknown error'
-  if (lastErr?.status === 429 || msg.toLowerCase().includes('quota')) {
-    return res.status(429).json({
-      error: 'QUOTA',
-      detail: 'Quota épuisé sur tous les modèles Gemini. Vérifie ta clé sur aistudio.google.com/apikey.',
-    })
-  }
-  return res.status(500).json({ error: msg })
+  // Tous les modèles ont échoué
+  console.error('All models failed:', JSON.stringify(attempts))
+  return res.status(500).json({
+    error: 'ALL_MODELS_FAILED',
+    attempts,
+  })
 }
