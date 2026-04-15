@@ -32,13 +32,38 @@ Si aucun animal n'est visible ou reconnaissable dans l'image, retourne uniquemen
 {"isAnimal": false}
 `.trim()
 
-// Modèles vision gratuits sur OpenRouter (marqués :free)
-const FREE_MODELS = [
-  'google/gemini-2.0-flash-exp:free',
-  'qwen/qwen-2.5-vl-72b-instruct:free',
-  'meta-llama/llama-3.2-11b-vision-instruct:free',
-  'mistralai/pixtral-12b:free',
-]
+/** Récupère dynamiquement les modèles vision gratuits disponibles sur OpenRouter. */
+async function listFreeVisionModels(apiKey) {
+  try {
+    const res = await fetch('https://openrouter.ai/api/v1/models', {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    })
+    if (!res.ok) return []
+    const { data } = await res.json()
+
+    const free = (data ?? []).filter((m) => {
+      const cost = parseFloat(m.pricing?.prompt ?? '1')
+      // Détecte la capacité image via plusieurs champs possibles
+      const modality = (m.architecture?.modality ?? '').toLowerCase()
+      const inputMods = (m.architecture?.input_modalities ?? [])
+      const hasImage = modality.includes('image') ||
+                       inputMods.includes('image') ||
+                       m.id.includes('vision') ||
+                       m.id.includes('vl-') ||
+                       m.id.includes('pixtral') ||
+                       m.id.includes('llava')
+      return cost === 0 && hasImage
+    })
+
+    free.sort((a, b) => (b.context_length ?? 0) - (a.context_length ?? 0))
+    const ids = free.slice(0, 6).map((m) => m.id)
+    console.log('Free vision models found:', ids)
+    return ids
+  } catch (e) {
+    console.error('Could not list models:', e.message)
+    return []
+  }
+}
 
 async function callOpenRouter(apiKey, model, base64Image, mimeType) {
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -62,14 +87,12 @@ async function callOpenRouter(apiKey, model, base64Image, mimeType) {
   })
 
   const payload = await res.json().catch(() => null)
-
   if (!res.ok) {
     const msg = payload?.error?.message ?? `HTTP ${res.status}`
     const err = new Error(msg)
     err.status = res.status
     throw err
   }
-
   return payload?.choices?.[0]?.message?.content ?? ''
 }
 
@@ -87,7 +110,20 @@ export default async function handler(req, res) {
   const { base64Image, mimeType = 'image/jpeg' } = req.body ?? {}
   if (!base64Image) return res.status(400).json({ error: 'Missing base64Image' })
 
-  const models = process.env.AI_MODEL ? [process.env.AI_MODEL] : FREE_MODELS
+  // Modèle forcé via env, ou découverte dynamique
+  let models
+  if (process.env.AI_MODEL) {
+    models = [process.env.AI_MODEL]
+  } else {
+    models = await listFreeVisionModels(apiKey)
+    if (models.length === 0) {
+      return res.status(500).json({
+        error: 'NO_FREE_VISION_MODELS',
+        detail: 'Aucun modèle vision gratuit trouvé sur OpenRouter. Vérifie ta clé sur openrouter.ai/keys.',
+      })
+    }
+  }
+
   const attempts = []
 
   for (const model of models) {
@@ -102,7 +138,6 @@ export default async function handler(req, res) {
 
     if (!text) {
       attempts.push({ model, error: 'empty response' })
-      console.error(`[${model}] Empty response`)
       continue
     }
 
@@ -118,7 +153,7 @@ export default async function handler(req, res) {
 
     if (!parsed.isAnimal) return res.status(422).json({ error: 'NOT_AN_ANIMAL' })
 
-    console.log(`[${model}] Success:`, parsed.scientificName)
+    console.log(`✓ [${model}]`, parsed.scientificName)
     return res.status(200).json({ ...parsed, _model: model })
   }
 
