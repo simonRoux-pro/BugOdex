@@ -1,5 +1,3 @@
-import { GoogleGenAI } from '@google/genai'
-
 const PROMPT = `
 Analyse cette photo et identifie l'animal, l'insecte, l'arachnide, le reptile, le mammifère ou tout autre animal visible.
 
@@ -34,13 +32,42 @@ Si aucun animal n'est visible ou reconnaissable dans l'image, retourne uniquemen
 {"isAnimal": false}
 `.trim()
 
-// Modèles à essayer dans l'ordre (du plus récent au plus stable)
-const FALLBACK_MODELS = [
+const MODELS = [
   'gemini-2.0-flash-lite',
   'gemini-2.0-flash',
-  'gemini-1.5-flash',
   'gemini-1.5-flash-latest',
+  'gemini-1.5-flash-8b',
+  'gemini-1.5-pro-latest',
 ]
+
+async function callGemini(apiKey, model, base64Image, mimeType) {
+  const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${apiKey}`
+  const body = {
+    contents: [{
+      parts: [
+        { inline_data: { mime_type: mimeType, data: base64Image } },
+        { text: PROMPT },
+      ],
+    }],
+    generationConfig: { temperature: 0.2 },
+  }
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    const status = res.status
+    const msg = err?.error?.message ?? res.statusText
+    throw Object.assign(new Error(msg), { status, raw: err })
+  }
+
+  const data = await res.json()
+  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -56,56 +83,33 @@ export default async function handler(req, res) {
   const { base64Image, mimeType = 'image/jpeg' } = req.body ?? {}
   if (!base64Image) return res.status(400).json({ error: 'Missing base64Image' })
 
-  const ai = new GoogleGenAI({ apiKey })
-  const models = process.env.AI_MODEL
-    ? [process.env.AI_MODEL]
-    : FALLBACK_MODELS
+  const models = process.env.AI_MODEL ? [process.env.AI_MODEL] : MODELS
+  let lastErr = null
 
-  let lastError = null
-
-  for (const modelName of models) {
+  for (const model of models) {
     try {
-      const response = await ai.models.generateContent({
-        model: modelName,
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { inlineData: { mimeType, data: base64Image } },
-              { text: PROMPT },
-            ],
-          },
-        ],
-      })
-
-      const raw = response.text.trim()
-      const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
+      const raw = await callGemini(apiKey, model, base64Image, mimeType)
+      const cleaned = raw.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
       const parsed = JSON.parse(cleaned)
 
       if (!parsed.isAnimal) return res.status(422).json({ error: 'NOT_AN_ANIMAL' })
-
-      // Retourne aussi le modèle utilisé (utile pour déboguer)
-      return res.status(200).json({ ...parsed, _model: modelName })
+      return res.status(200).json({ ...parsed, _model: model })
     } catch (err) {
-      lastError = err
-      // 404 = modèle inexistant → essaie le suivant
-      // 429 avec limit 0 = pas de quota → essaie le suivant
-      const msg = err.message ?? ''
-      if (msg.includes('404') || (msg.includes('429') && msg.includes('limit: 0'))) {
+      lastErr = err
+      // 404 = modèle absent, 429 limit 0 = pas de quota → essaie le suivant
+      if (err.status === 404 || (err.status === 429 && JSON.stringify(err.raw).includes('limit: 0'))) {
         continue
       }
-      // Autre erreur (réseau, JSON invalide…) → on arrête
       break
     }
   }
 
-  // Tous les modèles ont échoué
-  const errMsg = lastError?.message ?? 'Unknown error'
-  if (errMsg.includes('limit: 0') || errMsg.includes('quota')) {
+  const msg = lastErr?.message ?? 'Unknown error'
+  if (lastErr?.status === 429 || msg.toLowerCase().includes('quota')) {
     return res.status(429).json({
       error: 'QUOTA',
-      detail: 'Aucun modèle Gemini disponible sur le tier gratuit. Vérifie que ta clé vient bien de aistudio.google.com et non de console.cloud.google.com.',
+      detail: 'Quota épuisé sur tous les modèles Gemini. Vérifie ta clé sur aistudio.google.com/apikey.',
     })
   }
-  return res.status(500).json({ error: errMsg })
+  return res.status(500).json({ error: msg })
 }
