@@ -10,6 +10,7 @@ export async function identifyAnimal(base64Image, mimeType = 'image/jpeg') {
   if (!res.ok) {
     if (data.error === 'NO_API_KEY')     throw new Error('NO_API_KEY')
     if (data.error === 'NOT_AN_ANIMAL') throw new Error('NOT_AN_ANIMAL')
+    if (data.error === 'QUOTA')         throw new Error(`QUOTA:${data.detail ?? ''}`)
     throw new Error(data.error ?? `HTTP ${res.status}`)
   }
 

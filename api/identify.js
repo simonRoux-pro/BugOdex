@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai'
+import { GoogleGenAI } from '@google/genai'
 
 const PROMPT = `
 Analyse cette photo et identifie l'animal, l'insecte, l'arachnide, le reptile, le mammifère ou tout autre animal visible.
@@ -34,6 +34,14 @@ Si aucun animal n'est visible ou reconnaissable dans l'image, retourne uniquemen
 {"isAnimal": false}
 `.trim()
 
+// Modèles à essayer dans l'ordre (du plus récent au plus stable)
+const FALLBACK_MODELS = [
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-latest',
+]
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
@@ -48,25 +56,56 @@ export default async function handler(req, res) {
   const { base64Image, mimeType = 'image/jpeg' } = req.body ?? {}
   if (!base64Image) return res.status(400).json({ error: 'Missing base64Image' })
 
-  try {
-    const genAI = new GoogleGenerativeAI(apiKey)
-    const model = genAI.getGenerativeModel({
-      model: process.env.AI_MODEL ?? 'gemini-1.5-flash',
-    })
+  const ai = new GoogleGenAI({ apiKey })
+  const models = process.env.AI_MODEL
+    ? [process.env.AI_MODEL]
+    : FALLBACK_MODELS
 
-    const result = await model.generateContent([
-      { inlineData: { data: base64Image, mimeType } },
-      PROMPT,
-    ])
+  let lastError = null
 
-    const raw = result.response.text().trim()
-    const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
-    const parsed = JSON.parse(cleaned)
+  for (const modelName of models) {
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { inlineData: { mimeType, data: base64Image } },
+              { text: PROMPT },
+            ],
+          },
+        ],
+      })
 
-    if (!parsed.isAnimal) return res.status(422).json({ error: 'NOT_AN_ANIMAL' })
+      const raw = response.text.trim()
+      const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
+      const parsed = JSON.parse(cleaned)
 
-    return res.status(200).json(parsed)
-  } catch (err) {
-    return res.status(500).json({ error: err.message })
+      if (!parsed.isAnimal) return res.status(422).json({ error: 'NOT_AN_ANIMAL' })
+
+      // Retourne aussi le modèle utilisé (utile pour déboguer)
+      return res.status(200).json({ ...parsed, _model: modelName })
+    } catch (err) {
+      lastError = err
+      // 404 = modèle inexistant → essaie le suivant
+      // 429 avec limit 0 = pas de quota → essaie le suivant
+      const msg = err.message ?? ''
+      if (msg.includes('404') || (msg.includes('429') && msg.includes('limit: 0'))) {
+        continue
+      }
+      // Autre erreur (réseau, JSON invalide…) → on arrête
+      break
+    }
   }
+
+  // Tous les modèles ont échoué
+  const errMsg = lastError?.message ?? 'Unknown error'
+  if (errMsg.includes('limit: 0') || errMsg.includes('quota')) {
+    return res.status(429).json({
+      error: 'QUOTA',
+      detail: 'Aucun modèle Gemini disponible sur le tier gratuit. Vérifie que ta clé vient bien de aistudio.google.com et non de console.cloud.google.com.',
+    })
+  }
+  return res.status(500).json({ error: errMsg })
 }

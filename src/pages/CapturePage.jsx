@@ -65,12 +65,15 @@ export default function CapturePage({ onAdd }) {
     } catch (err) {
       setLoading(false)
       if (err.message === 'NO_API_KEY') {
-        setError(
-          'Clé API manquante. Crée un fichier .env avec VITE_ANTHROPIC_API_KEY=sk-ant-…\n' +
-          'Redémarre ensuite le serveur Vite.'
-        )
+        setError('Clé API manquante. Vérifie la variable GOOGLE_AI_KEY dans les settings Vercel.')
       } else if (err.message === 'NOT_AN_ANIMAL') {
         setError('Aucun animal reconnu sur cette photo. Essaie avec une autre image !')
+      } else if (err.message.startsWith('QUOTA:')) {
+        setError(
+          '⚠️ Quota Google AI épuisé.\n\n' +
+          'Assure-toi que ta clé vient de aistudio.google.com (et non de console.cloud.google.com).\n\n' +
+          err.message.slice(6)
+        )
       } else {
         setError(`Erreur : ${err.message}`)
       }
