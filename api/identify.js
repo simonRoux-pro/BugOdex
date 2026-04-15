@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { GoogleGenerativeAI } from '@google/generative-ai'
 
 const PROMPT = `
 Analyse cette photo et identifie l'animal, l'insecte, l'arachnide, le reptile, le mammifère ou tout autre animal visible.
@@ -42,35 +42,30 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
-  const apiKey = process.env.ANTHROPIC_API_KEY
+  const apiKey = process.env.GOOGLE_AI_KEY
   if (!apiKey) return res.status(500).json({ error: 'NO_API_KEY' })
 
   const { base64Image, mimeType = 'image/jpeg' } = req.body ?? {}
   if (!base64Image) return res.status(400).json({ error: 'Missing base64Image' })
 
   try {
-    const client = new Anthropic({ apiKey })
-    const response = await client.messages.create({
-      model: process.env.AI_MODEL ?? 'claude-opus-4-6',
-      max_tokens: 1024,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64Image } },
-            { type: 'text', text: PROMPT },
-          ],
-        },
-      ],
+    const genAI = new GoogleGenerativeAI(apiKey)
+    const model = genAI.getGenerativeModel({
+      model: process.env.AI_MODEL ?? 'gemini-2.0-flash',
     })
 
-    const raw = response.content[0].text.trim()
+    const result = await model.generateContent([
+      { inlineData: { data: base64Image, mimeType } },
+      PROMPT,
+    ])
+
+    const raw = result.response.text().trim()
     const cleaned = raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
-    const result = JSON.parse(cleaned)
+    const parsed = JSON.parse(cleaned)
 
-    if (!result.isAnimal) return res.status(422).json({ error: 'NOT_AN_ANIMAL' })
+    if (!parsed.isAnimal) return res.status(422).json({ error: 'NOT_AN_ANIMAL' })
 
-    return res.status(200).json(result)
+    return res.status(200).json(parsed)
   } catch (err) {
     return res.status(500).json({ error: err.message })
   }

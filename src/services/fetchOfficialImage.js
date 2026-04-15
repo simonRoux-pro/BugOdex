@@ -1,56 +1,29 @@
 /**
- * Cherche une image officielle sur Wikipedia pour un nom scientifique donné.
- * Essaie d'abord le nom scientifique, puis le nom commun en fallback.
+ * Cherche une photo officielle sur iNaturalist pour un nom scientifique donné.
+ * iNaturalist est 100% gratuit, aucune clé requise.
  */
 export async function fetchOfficialImage(scientificName, commonName) {
-  const candidates = [scientificName, commonName].filter(Boolean)
+  const terms = [scientificName, commonName].filter(Boolean)
 
-  for (const term of candidates) {
+  for (const term of terms) {
     try {
-      const url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(term)}`
+      const url =
+        `https://api.inaturalist.org/v1/taxa?q=${encodeURIComponent(term)}` +
+        `&per_page=1&locale=fr`
       const res = await fetch(url)
       if (!res.ok) continue
       const data = await res.json()
-      if (data.thumbnail?.source) {
-        // Demande une image plus grande (500px)
-        const biggerUrl = data.thumbnail.source.replace(/\/\d+px-/, '/500px-')
+      const taxon = data.results?.[0]
+      if (taxon?.default_photo?.medium_url) {
         return {
-          imageUrl: biggerUrl,
-          wikiUrl:  data.content_urls?.desktop?.page ?? null,
-          extract:  data.extract ?? null,
+          imageUrl:    taxon.default_photo.medium_url,
+          wikiUrl:     taxon.wikipedia_url ?? null,
+          attribution: taxon.default_photo.attribution ?? null,
         }
       }
     } catch {
-      // essaie le suivant
+      // essaie le terme suivant
     }
-  }
-
-  // Fallback : recherche via l'API MediaWiki
-  try {
-    const searchUrl =
-      `https://en.wikipedia.org/w/api.php?action=query&list=search` +
-      `&srsearch=${encodeURIComponent(scientificName)}&format=json&origin=*&srlimit=1`
-    const res = await fetch(searchUrl)
-    if (res.ok) {
-      const data = await res.json()
-      const pageTitle = data?.query?.search?.[0]?.title
-      if (pageTitle) {
-        const summaryUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(pageTitle)}`
-        const res2 = await fetch(summaryUrl)
-        if (res2.ok) {
-          const data2 = await res2.json()
-          if (data2.thumbnail?.source) {
-            return {
-              imageUrl: data2.thumbnail.source.replace(/\/\d+px-/, '/500px-'),
-              wikiUrl:  data2.content_urls?.desktop?.page ?? null,
-              extract:  data2.extract ?? null,
-            }
-          }
-        }
-      }
-    }
-  } catch {
-    // rien
   }
 
   return null
