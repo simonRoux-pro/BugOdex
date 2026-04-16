@@ -1,123 +1,148 @@
-const PROMPT = `
-Analyse cette photo et identifie l'animal, l'insecte, l'arachnide, le reptile, le mammifère ou tout autre animal visible.
-
-Réponds UNIQUEMENT avec un objet JSON valide (sans markdown, sans backticks, sans texte autour). Structure exacte :
-{
-  "isAnimal": true,
-  "confidence": "high",
-  "commonName": "Nom commun en français",
-  "scientificName": "Nom scientifique binomial",
-  "family": "Famille taxonomique",
-  "order": "Ordre taxonomique",
-  "class": "Classe (Insecta, Mammalia, Aves, Reptilia, Amphibia, Arachnida, etc.)",
-  "description": "Description détaillée en 2-3 phrases en français.",
-  "habitat": "Description de l'habitat naturel en français.",
-  "diet": "Régime alimentaire en français.",
-  "funFacts": ["Fait 1", "Fait 2", "Fait 3"],
-  "conservationStatus": "LC",
-  "conservationLabel": "Préoccupation mineure",
-  "emoji": "🐛",
-  "category": "insecte"
+const CATEGORY_MAP = {
+  Insecta: 'insecte', Arachnida: 'arachnide', Aves: 'oiseau',
+  Mammalia: 'mammifère', Reptilia: 'reptile', Amphibia: 'amphibien',
+  Actinopterygii: 'poisson', Malacostraca: 'crustacé', Gastropoda: 'mollusque',
+}
+const EMOJI_MAP = {
+  insecte: '🦋', arachnide: '🕷️', oiseau: '🐦', mammifère: '🦊',
+  reptile: '🦎', amphibien: '🐸', poisson: '🐟', crustacé: '🦀',
+  mollusque: '🐌', autre: '🐾',
+}
+const IUCN_LABEL = {
+  LC: 'Préoccupation mineure', NT: 'Quasi menacé', VU: 'Vulnérable',
+  EN: 'En danger', CR: 'En danger critique', EW: 'Éteint à l\'état sauvage',
+  EX: 'Éteint', DD: 'Données insuffisantes', NE: 'Non évalué',
 }
 
-Valeurs pour conservationStatus : LC, NT, VU, EN, CR, EW, EX, DD, NE
-Valeurs pour category : insecte, mammifère, oiseau, reptile, amphibien, poisson, arachnide, crustacé, mollusque, autre
-Valeurs pour confidence : high, medium, low
+/** Envoie l'image à l'API iNaturalist Computer Vision. */
+async function scoreImage(token, base64Image, mimeType) {
+  const boundary = 'BugOdex' + Date.now()
+  const imageBuffer = Buffer.from(base64Image, 'base64')
+  const body = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="image"; filename="photo.jpg"\r\n` +
+      `Content-Type: ${mimeType}\r\n\r\n`
+    ),
+    imageBuffer,
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ])
 
-Si aucun animal visible, retourne uniquement : {"isAnimal": false}
-`.trim()
-
-// Modèles vision sur HuggingFace (gratuits, aucune CB requise)
-const HF_MODELS = [
-  'Qwen/Qwen2.5-VL-7B-Instruct',
-  'meta-llama/Llama-3.2-11B-Vision-Instruct',
-  'microsoft/Phi-3.5-vision-instruct',
-]
-
-async function callHuggingFace(token, model, base64Image, mimeType) {
-  const url = `https://api-inference.huggingface.co/models/${model}/v1/chat/completions`
-  const res = await fetch(url, {
+  const res = await fetch('https://api.inaturalist.org/v1/computervision/score_image', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
+      'Content-Type': `multipart/form-data; boundary=${boundary}`,
     },
-    body: JSON.stringify({
-      model,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } },
-          { type: 'text', text: PROMPT },
-        ],
-      }],
-      max_tokens: 1024,
-      temperature: 0.2,
-    }),
+    body,
   })
 
-  const payload = await res.json().catch(() => null)
-
   if (!res.ok) {
-    const raw = payload?.error ?? payload?.message ?? `HTTP ${res.status}`
-    const msg = typeof raw === 'string' ? raw : JSON.stringify(raw)
-    const err = new Error(msg)
-    err.status = res.status
-    throw err
+    const data = await res.json().catch(() => ({}))
+    throw Object.assign(
+      new Error(data.error ?? `iNaturalist CV HTTP ${res.status}`),
+      { status: res.status }
+    )
   }
+  return res.json()
+}
 
-  return payload?.choices?.[0]?.message?.content ?? ''
+/** Récupère les détails complets d'un taxon (ancêtres, statut, résumé Wikipedia). */
+async function getTaxon(token, taxonId) {
+  const res = await fetch(
+    `https://api.inaturalist.org/v1/taxa/${taxonId}?locale=fr`,
+    { headers: { 'Authorization': `Bearer ${token}` } }
+  )
+  if (!res.ok) return null
+  const data = await res.json()
+  return data.results?.[0] ?? null
+}
+
+/** Construit l'objet espèce à partir des données iNaturalist. */
+function buildSpecies(topResult, taxon) {
+  const score = topResult.combined_score ?? 0
+  const ancestors = taxon?.ancestors ?? []
+
+  const find = (rank) => ancestors.find((a) => a.rank === rank)?.name ?? null
+
+  const iconicName = topResult.taxon?.iconic_taxon_name ?? ''
+  const category = CATEGORY_MAP[iconicName] ?? 'autre'
+
+  // Statut de conservation (premier statut IUCN trouvé)
+  const iucnCode = taxon?.conservation_statuses?.find((s) => s.iucn)?.[
+    'iucn'
+  ] ?? 'NE'
+
+  // Photo officielle
+  const photo =
+    taxon?.taxon_photos?.[0]?.photo ??
+    topResult.taxon?.default_photo ??
+    null
+  const officialImageUrl = photo?.medium_url ?? null
+
+  return {
+    isAnimal: true,
+    confidence: score > 0.65 ? 'high' : score > 0.35 ? 'medium' : 'low',
+    commonName:
+      topResult.taxon?.preferred_common_name ??
+      topResult.taxon?.name ??
+      'Espèce inconnue',
+    scientificName: topResult.taxon?.name ?? '',
+    family: find('family'),
+    order: find('order'),
+    class: find('class') ?? iconicName ?? null,
+    description: taxon?.wikipedia_summary ?? null,
+    habitat: null,
+    diet: null,
+    funFacts: [],
+    conservationStatus: iucnCode,
+    conservationLabel: IUCN_LABEL[iucnCode] ?? 'Non évalué',
+    emoji: EMOJI_MAP[category] ?? '🐾',
+    category,
+    // Transmis directement au client pour éviter un second fetch
+    _officialImageUrl: officialImageUrl,
+    _wikiUrl: topResult.taxon?.wikipedia_url ?? null,
+  }
 }
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
-  const token = process.env.HF_TOKEN
+  const token = process.env.INAT_TOKEN
   if (!token) return res.status(500).json({ error: 'NO_API_KEY' })
 
   const { base64Image, mimeType = 'image/jpeg' } = req.body ?? {}
   if (!base64Image) return res.status(400).json({ error: 'Missing base64Image' })
 
-  const models = process.env.AI_MODEL ? [process.env.AI_MODEL] : HF_MODELS
-  const attempts = []
+  try {
+    console.log('Calling iNaturalist CV API…')
+    const scoreData = await scoreImage(token, base64Image, mimeType)
+    const topResult = scoreData.results?.[0]
 
-  for (const model of models) {
-    let text = ''
-    try {
-      console.log(`Trying ${model}…`)
-      text = await callHuggingFace(token, model, base64Image, mimeType)
-    } catch (err) {
-      attempts.push({ model, error: err.message, status: err.status })
-      console.error(`[${model}] ${err.status ?? ''}: ${err.message}`)
-      continue
+    if (!topResult || (topResult.combined_score ?? 0) < 0.05) {
+      return res.status(422).json({ error: 'NOT_AN_ANIMAL' })
     }
 
-    if (!text) {
-      attempts.push({ model, error: 'empty response' })
-      continue
+    console.log(`Top match: ${topResult.taxon?.name} (score ${topResult.combined_score})`)
+
+    // Détails complets du taxon
+    const taxonDetails = await getTaxon(token, topResult.taxon?.id)
+    const species = buildSpecies(topResult, taxonDetails)
+
+    console.log('✓ Success:', species.scientificName)
+    return res.status(200).json(species)
+  } catch (err) {
+    console.error('iNaturalist error:', err.message)
+    if (err.status === 401) {
+      return res.status(401).json({
+        error: 'INVALID_TOKEN',
+        detail: 'Token iNaturalist invalide ou expiré. Régénère-le sur inaturalist.org/users/api_token',
+      })
     }
-
-    let parsed
-    try {
-      const cleaned = text.trim().replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '')
-      parsed = JSON.parse(cleaned)
-    } catch {
-      attempts.push({ model, error: `JSON parse failed: ${text.slice(0, 100)}` })
-      console.error(`[${model}] JSON parse failed:`, text.slice(0, 100))
-      continue
-    }
-
-    if (!parsed.isAnimal) return res.status(422).json({ error: 'NOT_AN_ANIMAL' })
-
-    console.log(`✓ [${model}]`, parsed.scientificName)
-    return res.status(200).json({ ...parsed, _model: model })
+    return res.status(500).json({ error: err.message })
   }
-
-  console.error('All models failed:', JSON.stringify(attempts))
-  return res.status(500).json({ error: 'ALL_MODELS_FAILED', attempts })
 }

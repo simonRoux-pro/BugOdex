@@ -45,19 +45,27 @@ export default function CapturePage({ onAdd }) {
       const compressed   = await compressImage(rawFile, 900, 0.75)
       const { base64, mimeType } = parseDataUrl(compressed)
 
-      // Identification IA
-      setLoadMsg('Identification par IA…')
+      // Identification via iNaturalist
+      setLoadMsg('Identification de l\'espèce…')
       const species = await identifyAnimal(base64, mimeType)
 
-      // Image officielle Wikipedia
-      setLoadMsg('Recherche de l\'image officielle…')
-      const official = await fetchOfficialImage(species.scientificName, species.commonName)
+      // Photo officielle — déjà incluse dans la réponse iNaturalist
+      let officialImage = species._officialImageUrl ?? null
+      let wikiUrl       = species._wikiUrl ?? null
+
+      // Fallback Wikipedia si iNaturalist n'a pas fourni de photo
+      if (!officialImage) {
+        setLoadMsg('Recherche de l\'image officielle…')
+        const official = await fetchOfficialImage(species.scientificName, species.commonName)
+        officialImage = official?.imageUrl ?? null
+        wikiUrl       = official?.wikiUrl  ?? null
+      }
 
       // Sauvegarde
       const entry = onAdd({
-        userPhoto:    preview,
-        officialImage: official?.imageUrl ?? null,
-        wikiUrl:       official?.wikiUrl  ?? null,
+        userPhoto: preview,
+        officialImage,
+        wikiUrl,
         species,
       })
 
@@ -65,7 +73,7 @@ export default function CapturePage({ onAdd }) {
     } catch (err) {
       setLoading(false)
       if (err.message === 'NO_API_KEY') {
-        setError('Clé API manquante. Vérifie la variable GOOGLE_AI_KEY dans les settings Vercel.')
+        setError('Token manquant. Ajoute INAT_TOKEN dans les variables d\'environnement Vercel.')
       } else if (err.message === 'NOT_AN_ANIMAL') {
         setError('Aucun animal reconnu sur cette photo. Essaie avec une autre image !')
       } else if (err.message.startsWith('QUOTA:')) {

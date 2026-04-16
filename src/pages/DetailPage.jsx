@@ -130,19 +130,25 @@ export default function DetailPage({ getEntry, removeEntry }) {
         </div>
 
         {/* Description */}
-        <InfoSection icon="📋" title="Description">
-          <p className="text-forest-700 text-sm leading-relaxed">{species.description}</p>
-        </InfoSection>
+        {species.description && (
+          <InfoSection icon="📋" title="Description">
+            <p className="text-forest-700 text-sm leading-relaxed">{species.description}</p>
+          </InfoSection>
+        )}
 
         {/* Habitat */}
-        <InfoSection icon="🌿" title="Habitat">
-          <p className="text-forest-700 text-sm leading-relaxed">{species.habitat}</p>
-        </InfoSection>
+        {species.habitat && (
+          <InfoSection icon="🌿" title="Habitat">
+            <p className="text-forest-700 text-sm leading-relaxed">{species.habitat}</p>
+          </InfoSection>
+        )}
 
         {/* Alimentation */}
-        <InfoSection icon="🍃" title="Régime alimentaire">
-          <p className="text-forest-700 text-sm leading-relaxed">{species.diet}</p>
-        </InfoSection>
+        {species.diet && (
+          <InfoSection icon="🍃" title="Régime alimentaire">
+            <p className="text-forest-700 text-sm leading-relaxed">{species.diet}</p>
+          </InfoSection>
+        )}
 
         {/* Fun facts */}
         {species.funFacts?.length > 0 && (
