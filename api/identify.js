@@ -13,65 +13,34 @@ Réponds UNIQUEMENT avec un objet JSON valide (sans markdown, sans backticks, sa
   "description": "Description détaillée en 2-3 phrases en français.",
   "habitat": "Description de l'habitat naturel en français.",
   "diet": "Régime alimentaire en français.",
-  "funFacts": [
-    "Fait intéressant 1",
-    "Fait intéressant 2",
-    "Fait intéressant 3"
-  ],
+  "funFacts": ["Fait 1", "Fait 2", "Fait 3"],
   "conservationStatus": "LC",
   "conservationLabel": "Préoccupation mineure",
   "emoji": "🐛",
   "category": "insecte"
 }
 
-Valeurs autorisées pour conservationStatus : LC, NT, VU, EN, CR, EW, EX, DD, NE
-Valeurs autorisées pour category : insecte, mammifère, oiseau, reptile, amphibien, poisson, arachnide, crustacé, mollusque, autre
-Valeurs autorisées pour confidence : high, medium, low
+Valeurs pour conservationStatus : LC, NT, VU, EN, CR, EW, EX, DD, NE
+Valeurs pour category : insecte, mammifère, oiseau, reptile, amphibien, poisson, arachnide, crustacé, mollusque, autre
+Valeurs pour confidence : high, medium, low
 
-Si aucun animal n'est visible ou reconnaissable dans l'image, retourne uniquement :
-{"isAnimal": false}
+Si aucun animal visible, retourne uniquement : {"isAnimal": false}
 `.trim()
 
-/** Récupère dynamiquement les modèles vision gratuits disponibles sur OpenRouter. */
-async function listFreeVisionModels(apiKey) {
-  try {
-    const res = await fetch('https://openrouter.ai/api/v1/models', {
-      headers: { 'Authorization': `Bearer ${apiKey}` },
-    })
-    if (!res.ok) return []
-    const { data } = await res.json()
+// Modèles vision sur HuggingFace (gratuits, aucune CB requise)
+const HF_MODELS = [
+  'Qwen/Qwen2.5-VL-7B-Instruct',
+  'meta-llama/Llama-3.2-11B-Vision-Instruct',
+  'microsoft/Phi-3.5-vision-instruct',
+]
 
-    const free = (data ?? []).filter((m) => {
-      const cost = parseFloat(m.pricing?.prompt ?? '1')
-      // Détecte la capacité image via plusieurs champs possibles
-      const modality = (m.architecture?.modality ?? '').toLowerCase()
-      const inputMods = (m.architecture?.input_modalities ?? [])
-      const hasImage = modality.includes('image') ||
-                       inputMods.includes('image') ||
-                       m.id.includes('vision') ||
-                       m.id.includes('vl-') ||
-                       m.id.includes('pixtral') ||
-                       m.id.includes('llava')
-      return cost === 0 && hasImage
-    })
-
-    free.sort((a, b) => (b.context_length ?? 0) - (a.context_length ?? 0))
-    const ids = free.slice(0, 6).map((m) => m.id)
-    console.log('Free vision models found:', ids)
-    return ids
-  } catch (e) {
-    console.error('Could not list models:', e.message)
-    return []
-  }
-}
-
-async function callOpenRouter(apiKey, model, base64Image, mimeType) {
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+async function callHuggingFace(token, model, base64Image, mimeType) {
+  const url = `https://api-inference.huggingface.co/models/${model}/v1/chat/completions`
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${apiKey}`,
+      'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
-      'X-Title': 'BugOdex',
     },
     body: JSON.stringify({
       model,
@@ -82,17 +51,21 @@ async function callOpenRouter(apiKey, model, base64Image, mimeType) {
           { type: 'text', text: PROMPT },
         ],
       }],
+      max_tokens: 1024,
       temperature: 0.2,
     }),
   })
 
   const payload = await res.json().catch(() => null)
+
   if (!res.ok) {
-    const msg = payload?.error?.message ?? `HTTP ${res.status}`
+    const raw = payload?.error ?? payload?.message ?? `HTTP ${res.status}`
+    const msg = typeof raw === 'string' ? raw : JSON.stringify(raw)
     const err = new Error(msg)
     err.status = res.status
     throw err
   }
+
   return payload?.choices?.[0]?.message?.content ?? ''
 }
 
@@ -104,32 +77,20 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
-  const apiKey = process.env.OPENROUTER_API_KEY
-  if (!apiKey) return res.status(500).json({ error: 'NO_API_KEY' })
+  const token = process.env.HF_TOKEN
+  if (!token) return res.status(500).json({ error: 'NO_API_KEY' })
 
   const { base64Image, mimeType = 'image/jpeg' } = req.body ?? {}
   if (!base64Image) return res.status(400).json({ error: 'Missing base64Image' })
 
-  // Modèle forcé via env, ou découverte dynamique
-  let models
-  if (process.env.AI_MODEL) {
-    models = [process.env.AI_MODEL]
-  } else {
-    models = await listFreeVisionModels(apiKey)
-    if (models.length === 0) {
-      return res.status(500).json({
-        error: 'NO_FREE_VISION_MODELS',
-        detail: 'Aucun modèle vision gratuit trouvé sur OpenRouter. Vérifie ta clé sur openrouter.ai/keys.',
-      })
-    }
-  }
-
+  const models = process.env.AI_MODEL ? [process.env.AI_MODEL] : HF_MODELS
   const attempts = []
 
   for (const model of models) {
     let text = ''
     try {
-      text = await callOpenRouter(apiKey, model, base64Image, mimeType)
+      console.log(`Trying ${model}…`)
+      text = await callHuggingFace(token, model, base64Image, mimeType)
     } catch (err) {
       attempts.push({ model, error: err.message, status: err.status })
       console.error(`[${model}] ${err.status ?? ''}: ${err.message}`)
