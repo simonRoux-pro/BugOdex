@@ -64,8 +64,12 @@ export default async function handler(req, res) {
   if (!theme) return res.status(400).json({ error: 'MISSING_THEME' })
   if (theme.length > 500) return res.status(400).json({ error: 'THEME_TOO_LONG' })
 
+  const BLOCK_REASONS = ['SAFETY', 'PROHIBITED_CONTENT', 'RECITATION', 'SPII', 'BLOCKLIST', 'OTHER']
   let lastErr = null
+  let anyContentBlock = false
 
+  // On essaie chaque modèle avant d'abandonner : ils ont chacun leur propre
+  // quota, et parfois un seuil de filtrage de contenu légèrement différent.
   for (const model of MODELS) {
     try {
       const geminiRes = await fetch(
@@ -92,12 +96,18 @@ export default async function handler(req, res) {
       }
 
       const data = await geminiRes.json()
+      const candidate = data.candidates?.[0]
 
-      if (data.promptFeedback?.blockReason) {
-        return res.status(422).json({ error: 'REFUSED' })
+      if (data.promptFeedback?.blockReason || BLOCK_REASONS.includes(candidate?.finishReason)) {
+        console.error(
+          `Gemini content block (${model}):`,
+          data.promptFeedback?.blockReason ?? candidate?.finishReason
+        )
+        anyContentBlock = true
+        continue
       }
 
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text
+      const text = candidate?.content?.parts?.[0]?.text
       if (!text) throw Object.assign(new Error('Réponse vide'), { status: 502 })
 
       const parsed = JSON.parse(text)
@@ -109,12 +119,12 @@ export default async function handler(req, res) {
     } catch (err) {
       console.error(`Gemini error (${model}):`, err?.message)
       lastErr = err
-      // Quota atteint sur ce modèle : on tente le suivant, qui a son propre quota.
-      if (err.status === 429) continue
-      break
     }
   }
 
+  if (anyContentBlock && !lastErr) {
+    return res.status(422).json({ error: 'REFUSED' })
+  }
   if (lastErr?.status === 429) {
     return res.status(429).json({ error: 'QUOTA_DEPASSE' })
   }

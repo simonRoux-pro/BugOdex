@@ -8,7 +8,7 @@ const ERROR_MESSAGES = {
   MISSING_THEME: 'Merci de préciser un thème.',
   THEME_TOO_LONG: 'Ce thème est trop long, essaie de le résumer.',
   NO_API_KEY: "La clé API Gemini (GOOGLE_AI_KEY) n'est pas configurée sur ce déploiement.",
-  REFUSED: "Gemini n'a pas pu générer de parcours pour ce thème.",
+  REFUSED: "Gemini bloque ce thème (souvent lié aux règles de Google sur les contenus électoraux/partis réels) — reformule-le de façon plus générale (ex. sans nommer un parti précis) et réessaie.",
   INCOMPLETE_PARCOURS: 'Le parcours généré était incomplet, réessaie.',
   QUOTA_DEPASSE: "L'API est momentanément saturée après plusieurs tentatives — réessaie dans une minute.",
   GEMINI_ERROR: 'Une erreur est survenue en contactant Gemini.',
@@ -31,7 +31,9 @@ export default function HomePage() {
       saveParcours(parcours)
       navigate(`/parcours/${parcours.id}`)
     } catch (err) {
-      setError(ERROR_MESSAGES[err.code] ?? err.message ?? 'Erreur inconnue')
+      const base = ERROR_MESSAGES[err.code] ?? err.message ?? 'Erreur inconnue'
+      const detail = err.code === 'GEMINI_ERROR' && err.message ? ` (${err.message})` : ''
+      setError(base + detail)
     } finally {
       setLoading(false)
     }

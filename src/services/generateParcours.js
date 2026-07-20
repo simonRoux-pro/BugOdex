@@ -13,7 +13,7 @@ async function requestParcours(theme) {
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
-    throw Object.assign(new Error(data.error ?? `Erreur HTTP ${res.status}`), {
+    throw Object.assign(new Error(data.detail ?? data.error ?? `Erreur HTTP ${res.status}`), {
       code: data.error,
       status: res.status,
     })
