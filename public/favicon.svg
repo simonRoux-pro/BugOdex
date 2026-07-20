@@ -1,4 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <circle cx="50" cy="50" r="50" fill="#1f6843"/>
-  <text y=".9em" font-size="72" x="13" y="78">🐛</text>
+  <rect width="100" height="100" rx="18" fill="#3d3025"/>
+  <path d="M20 28 Q50 18 80 28 L80 78 Q50 68 20 78 Z" fill="#f7f5f2"/>
+  <line x1="50" y1="21" x2="50" y2="71" stroke="#3d3025" stroke-width="2"/>
+  <line x1="28" y1="38" x2="44" y2="35" stroke="#c0af93" stroke-width="2"/>
+  <line x1="28" y1="48" x2="44" y2="45" stroke="#c0af93" stroke-width="2"/>
+  <line x1="28" y1="58" x2="44" y2="55" stroke="#c0af93" stroke-width="2"/>
+  <line x1="56" y1="35" x2="72" y2="38" stroke="#c0af93" stroke-width="2"/>
+  <line x1="56" y1="45" x2="72" y2="48" stroke="#c0af93" stroke-width="2"/>
+  <line x1="56" y1="55" x2="72" y2="58" stroke="#c0af93" stroke-width="2"/>
 </svg>

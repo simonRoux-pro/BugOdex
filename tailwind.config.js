@@ -7,18 +7,21 @@ export default {
   theme: {
     extend: {
       colors: {
-        forest: {
-          50:  '#f0faf4',
-          100: '#dcf4e6',
-          200: '#bbeacf',
-          300: '#8dd9af',
-          400: '#58c088',
-          500: '#34a168',
-          600: '#258252',
-          700: '#1f6843',
-          800: '#1c5237',
-          900: '#19442f',
+        ink: {
+          50: '#f7f5f2',
+          100: '#ece7de',
+          200: '#d9cfbd',
+          300: '#c0af93',
+          400: '#a68c6a',
+          500: '#8a6f4e',
+          600: '#6f5940',
+          700: '#584636',
+          800: '#3d3025',
+          900: '#241c16',
         },
+      },
+      fontFamily: {
+        serif: ['Georgia', 'Cambria', '"Times New Roman"', 'serif'],
       },
     },
   },

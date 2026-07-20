@@ -1,21 +1,18 @@
 import { Routes, Route } from 'react-router-dom'
-import Navbar from './components/Navbar'
-import CapturePage    from './pages/CapturePage'
-import CollectionPage from './pages/CollectionPage'
-import DetailPage     from './pages/DetailPage'
-import { useCollection } from './hooks/useCollection'
+import Navbar from './components/Navbar.jsx'
+import HomePage from './pages/HomePage.jsx'
+import ParcoursPage from './pages/ParcoursPage.jsx'
+import ReaderPage from './pages/ReaderPage.jsx'
 
 export default function App() {
-  const { collection, addEntry, removeEntry, getEntry } = useCollection()
-
   return (
-    <div className="min-h-screen flex flex-col">
-      <Navbar collectionCount={collection.length} />
+    <div className="min-h-full flex flex-col">
+      <Navbar />
       <main className="flex-1">
         <Routes>
-          <Route path="/"               element={<CapturePage    onAdd={addEntry} />} />
-          <Route path="/collection"     element={<CollectionPage collection={collection} />} />
-          <Route path="/detail/:id"     element={<DetailPage     getEntry={getEntry} removeEntry={removeEntry} />} />
+          <Route path="/" element={<HomePage />} />
+          <Route path="/parcours/:parcoursId" element={<ParcoursPage />} />
+          <Route path="/parcours/:parcoursId/livre/:livreId" element={<ReaderPage />} />
         </Routes>
       </main>
     </div>
