@@ -1,7 +1,10 @@
 // Chaîne de repli : chaque modèle a son propre quota gratuit séparé, donc si le
 // premier est momentanément saturé (429), on retente avec le suivant plutôt que
-// d'échouer directement.
-const MODELS = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash']
+// d'échouer directement. Uniquement des modèles confirmés disponibles sur
+// l'API v1beta — ne pas ajouter un modèle sans avoir vérifié qu'il répond
+// correctement à generateContent (un modèle retiré renvoie un 404 silencieux
+// qui masque la vraie cause d'un échec précédent).
+const MODELS = ['gemini-2.0-flash', 'gemini-2.0-flash-lite']
 
 const PARCOURS_SCHEMA = {
   type: 'OBJECT',
@@ -67,6 +70,7 @@ export default async function handler(req, res) {
   const BLOCK_REASONS = ['SAFETY', 'PROHIBITED_CONTENT', 'RECITATION', 'SPII', 'BLOCKLIST', 'OTHER']
   let lastErr = null
   let anyContentBlock = false
+  let anyQuota = false
 
   // On essaie chaque modèle avant d'abandonner : ils ont chacun leur propre
   // quota, et parfois un seuil de filtrage de contenu légèrement différent.
@@ -119,14 +123,18 @@ export default async function handler(req, res) {
     } catch (err) {
       console.error(`Gemini error (${model}):`, err?.message)
       lastErr = err
+      if (err.status === 429) anyQuota = true
     }
   }
 
-  if (anyContentBlock && !lastErr) {
-    return res.status(422).json({ error: 'REFUSED' })
-  }
-  if (lastErr?.status === 429) {
+  // Priorité de diagnostic : un quota atteint sur au moins un modèle est le
+  // signal le plus actionnable (réessayer plus tard) ; sinon un blocage de
+  // contenu ; sinon l'erreur technique la plus récente.
+  if (anyQuota) {
     return res.status(429).json({ error: 'QUOTA_DEPASSE' })
+  }
+  if (anyContentBlock) {
+    return res.status(422).json({ error: 'REFUSED' })
   }
   const status = lastErr?.status && Number.isInteger(lastErr.status) ? lastErr.status : 500
   return res.status(status >= 400 && status < 600 ? status : 500).json({
