@@ -1,10 +1,14 @@
-// Cherche une source lisible/téléchargeable pour un livre donné : Project
-// Gutenberg, Internet Archive, puis deux moteurs de recherche web généraux
-// grattés en HTML (DuckDuckGo puis Bing — aucun des deux ne nécessite de
-// clé). Deux moteurs indépendants au lieu d'un seul : un moteur peut bloquer
-// les requêtes venant d'IP de datacenter (Vercel) sans prévenir, l'autre pas
-// forcément. Chaque étape échouée laisse une trace dans "raison" pour
-// diagnostiquer précisément si tout échoue, plutôt que de deviner.
+// Cherche une source lisible/téléchargeable pour un livre donné, dans cet
+// ordre : Project Gutenberg, Internet Archive, une recherche Google faite
+// PAR GEMINI (grounding — l'appel part de l'infrastructure de Google, pas de
+// l'IP du serveur, donc pas soumis aux blocages anti-bot ci-dessous), puis en
+// tout dernier recours DuckDuckGo et Bing grattés en HTML. Ces deux derniers
+// sont connus pour bloquer les requêtes venant d'IP de datacenter (Vercel)
+// sans prévenir — un problème classique du scraping depuis du serverless,
+// indépendant du parsing HTML. Chaque étape échouée laisse une trace dans
+// "raison" pour diagnostiquer précisément si tout échoue, plutôt que deviner.
+
+import { getApiKeys } from './_lib/geminiKeys.js'
 
 const FORMAT_PRIORITY = [
   { prefix: 'application/pdf', type: 'pdf' },
@@ -14,10 +18,13 @@ const FORMAT_PRIORITY = [
 ]
 
 const BROWSER_UA = 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36'
+const GEMINI_SEARCH_MODEL = 'gemini-2.0-flash'
 
 async function searchGutendex(auteur, titre) {
   const q = encodeURIComponent(`${titre} ${auteur}`)
-  const res = await fetch(`https://gutendex.com/books?search=${q}`)
+  const res = await fetch(`https://gutendex.com/books?search=${q}`, {
+    headers: { 'User-Agent': BROWSER_UA },
+  })
   if (!res.ok) return { debug: `Gutenberg HTTP ${res.status}` }
   const data = await res.json()
   const book = data.results?.[0]
@@ -39,20 +46,23 @@ async function searchGutendex(auteur, titre) {
   return { debug: 'Gutenberg: résultat trouvé mais sans format utilisable' }
 }
 
-async function searchArchiveOrg(auteur, titre) {
-  const q = encodeURIComponent(`${titre} ${auteur}`)
+async function queryArchiveOrg(query) {
+  const q = encodeURIComponent(query)
   const searchRes = await fetch(
-    `https://archive.org/advancedsearch.php?q=${q}&fl[]=identifier&fl[]=title&rows=3&page=1&output=json&mediatype=texts`
+    `https://archive.org/advancedsearch.php?q=${q}&fl[]=identifier&fl[]=title&rows=3&page=1&output=json&mediatype=texts`,
+    { headers: { 'User-Agent': BROWSER_UA } }
   )
   if (!searchRes.ok) return { debug: `Internet Archive HTTP ${searchRes.status}` }
   const searchData = await searchRes.json()
   const docs = searchData.response?.docs ?? []
-  if (docs.length === 0) return { debug: 'Internet Archive: aucun résultat' }
+  if (docs.length === 0) return { debug: null } // pas d'erreur, juste rien trouvé pour cette requête
 
   for (const doc of docs) {
     const identifier = doc.identifier
     if (!identifier) continue
-    const metaRes = await fetch(`https://archive.org/metadata/${identifier}`)
+    const metaRes = await fetch(`https://archive.org/metadata/${identifier}`, {
+      headers: { 'User-Agent': BROWSER_UA },
+    })
     if (!metaRes.ok) continue
     const meta = await metaRes.json()
     const files = meta.files ?? []
@@ -65,12 +75,69 @@ async function searchArchiveOrg(auteur, titre) {
         result: {
           url: `https://archive.org/download/${identifier}/${encodeURIComponent(pdfFile.name)}`,
           type: 'pdf',
-          titreSource: `${doc.title ?? titre} — Internet Archive`,
+          titreSource: `${doc.title ?? query} — Internet Archive`,
         },
       }
     }
   }
-  return { debug: `Internet Archive: ${docs.length} résultat(s) mais aucun PDF` }
+  return { debug: `${docs.length} résultat(s) mais aucun PDF` }
+}
+
+async function searchArchiveOrg(auteur, titre) {
+  // Requête précise d'abord, puis repli sur le titre seul (une requête trop
+  // longue/spécifique — titre + auteur(s) — peut ne rien matcher alors que
+  // le titre seul trouve l'édition numérisée).
+  const precise = await queryArchiveOrg(`${titre} ${auteur}`)
+  if (precise.result) return precise
+  const broad = await queryArchiveOrg(titre)
+  if (broad.result) return broad
+  const debug = [precise.debug, broad.debug].filter(Boolean).join(' / ')
+  return { debug: `Internet Archive: ${debug || 'aucun résultat'}` }
+}
+
+/** Demande à Gemini de chercher lui-même un lien PDF direct (recherche Google
+ * exécutée côté Google, donc jamais bloquée pour "IP de datacenter"). */
+async function searchViaGeminiGrounding(auteur, titre) {
+  const apiKeys = getApiKeys()
+  if (apiKeys.length === 0) return { debug: 'Gemini+recherche: pas de clé API' }
+
+  const prompt = `Cherche sur le web un lien direct vers un fichier PDF téléchargeable de ce texte :
+Titre : ${titre}
+Auteur : ${auteur}
+
+Réponds UNIQUEMENT par l'URL directe du PDF (elle doit commencer par http:// ou https:// et se terminer par .pdf), sans aucun autre texte, aucune explication. Si tu ne trouves vraiment aucun lien PDF direct fiable, réponds exactement : NONE`
+
+  for (const apiKey of apiKeys) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_SEARCH_MODEL}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            tools: [{ google_search: {} }],
+          }),
+        }
+      )
+      if (!res.ok) continue
+
+      const data = await res.json()
+      const text = (data.candidates?.[0]?.content?.parts ?? [])
+        .map((p) => p.text)
+        .filter(Boolean)
+        .join(' ')
+      const match = text.match(/https?:\/\/\S+?\.pdf\b/i)
+      if (match) {
+        return {
+          result: { url: match[0], type: 'pdf', titreSource: `${titre} — trouvé via recherche Google (Gemini)` },
+        }
+      }
+    } catch {
+      // clé suivante
+    }
+  }
+  return { debug: 'Gemini+recherche Google: aucun lien PDF trouvé' }
 }
 
 function decodeHtmlEntities(str) {
@@ -160,6 +227,7 @@ export default async function handler(req, res) {
   const stages = [
     () => searchGutendex(auteur, titre),
     () => searchArchiveOrg(auteur, titre),
+    () => searchViaGeminiGrounding(auteur, titre),
     () => searchDuckDuckGo(searchQuery),
     () => searchBing(searchQuery),
   ]

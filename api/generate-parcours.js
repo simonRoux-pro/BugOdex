@@ -1,3 +1,5 @@
+import { getApiKeys } from './_lib/geminiKeys.js'
+
 // On ne fige plus une liste de noms de modèles en dur : Google renomme,
 // restreint ("no longer available to new users") ou retire des modèles sans
 // préavis, ce qui cassait silencieusement l'app à chaque fois qu'on devinait
@@ -40,19 +42,6 @@ async function listModelsForKey(apiKey) {
     console.error('ListModels a échoué, repli sur le modèle statique:', err?.message)
     return [FALLBACK_MODEL]
   }
-}
-
-// Clés API optionnelles supplémentaires (GOOGLE_AI_KEY_2, GOOGLE_AI_KEY_3, …) —
-// chaque clé Google gratuite a son propre quota, donc en ajouter une seconde
-// (compte Google différent, toujours gratuit, aucune carte requise) multiplie
-// la capacité disponible sans rien changer d'autre.
-function getApiKeys() {
-  const keys = [process.env.GOOGLE_AI_KEY]
-  for (let i = 2; i <= 5; i += 1) {
-    const extra = process.env[`GOOGLE_AI_KEY_${i}`]
-    if (extra) keys.push(extra)
-  }
-  return keys.filter(Boolean)
 }
 
 const PARCOURS_SCHEMA = {
