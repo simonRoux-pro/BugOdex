@@ -1,14 +1,14 @@
-// Cherche une source lisible/téléchargeable pour un livre donné, dans cet
-// ordre : Project Gutenberg, Internet Archive, une recherche Google faite
-// PAR GEMINI (grounding — l'appel part de l'infrastructure de Google, pas de
-// l'IP du serveur, donc pas soumis aux blocages anti-bot ci-dessous), puis en
-// tout dernier recours DuckDuckGo et Bing grattés en HTML. Ces deux derniers
-// sont connus pour bloquer les requêtes venant d'IP de datacenter (Vercel)
-// sans prévenir — un problème classique du scraping depuis du serverless,
-// indépendant du parsing HTML. Chaque étape échouée laisse une trace dans
-// "raison" pour diagnostiquer précisément si tout échoue, plutôt que deviner.
-
-import { getApiKeys } from './_lib/geminiKeys.js'
+// Cherche une source lisible/téléchargeable pour un livre donné : Project
+// Gutenberg, Internet Archive, puis DuckDuckGo et Bing grattés en HTML en
+// dernier recours. Ces deux derniers (et parfois Gutenberg/Gutendex aussi)
+// sont bloqués sans prévenir pour les requêtes venant d'une IP de datacenter
+// (Vercel) — un problème classique et structurel du scraping depuis du
+// serverless. On a aussi essayé de déléguer la recherche à l'outil de
+// recherche Google intégré à Gemini (grounding), qui exécute la recherche
+// depuis l'infrastructure de Google plutôt que depuis notre IP — mais ce
+// quota est fixé à 0 sur le tier gratuit (confirmé par l'API : "limit: 0"),
+// donc inutilisable sans facturation. Chaque étape échouée laisse une trace
+// dans "raison" pour diagnostiquer précisément si tout échoue.
 
 const FORMAT_PRIORITY = [
   { prefix: 'application/pdf', type: 'pdf' },
@@ -18,7 +18,6 @@ const FORMAT_PRIORITY = [
 ]
 
 const BROWSER_UA = 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36'
-const GEMINI_SEARCH_MODEL = 'gemini-2.0-flash'
 
 async function searchGutendex(auteur, titre) {
   const q = encodeURIComponent(`${titre} ${auteur}`)
@@ -84,80 +83,22 @@ async function queryArchiveOrg(query) {
 }
 
 async function searchArchiveOrg(auteur, titre) {
-  // Requête précise d'abord, puis repli sur le titre seul (une requête trop
-  // longue/spécifique — titre + auteur(s) — peut ne rien matcher alors que
-  // le titre seul trouve l'édition numérisée).
-  const precise = await queryArchiveOrg(`${titre} ${auteur}`)
-  if (precise.result) return precise
-  const broad = await queryArchiveOrg(titre)
-  if (broad.result) return broad
-  const debug = [precise.debug, broad.debug].filter(Boolean).join(' / ')
-  return { debug: `Internet Archive: ${debug || 'aucun résultat'}` }
-}
+  // Requête en expression exacte d'abord (le titre entre guillemets évite que
+  // des mots-outils comme "du"/"le" dispersent le classement), puis repli sur
+  // le titre seul non cité, puis titre+auteur non cité.
+  const attempts = [
+    () => queryArchiveOrg(`"${titre}"`),
+    () => queryArchiveOrg(titre),
+    () => queryArchiveOrg(`${titre} ${auteur}`),
+  ]
 
-/** Demande à Gemini de chercher lui-même un lien PDF direct (recherche Google
- * exécutée côté Google, donc jamais bloquée pour "IP de datacenter"). */
-async function searchViaGeminiGrounding(auteur, titre) {
-  const apiKeys = getApiKeys()
-  if (apiKeys.length === 0) return { debug: 'Gemini+recherche: pas de clé API' }
-
-  const prompt = `Cherche sur le web un lien direct vers un fichier PDF téléchargeable de ce texte :
-Titre : ${titre}
-Auteur : ${auteur}
-
-Réponds UNIQUEMENT par l'URL directe du PDF (elle doit commencer par http:// ou https:// et se terminer par .pdf), sans aucun autre texte, aucune explication. Si tu ne trouves vraiment aucun lien PDF direct fiable, réponds exactement : NONE`
-
-  let lastDebug = 'Gemini+recherche Google: aucune tentative'
-
-  for (const apiKey of apiKeys) {
-    try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_SEARCH_MODEL}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            tools: [{ google_search: {} }],
-          }),
-        }
-      )
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}))
-        lastDebug = `Gemini+recherche Google: HTTP ${res.status}${errData.error?.message ? ' — ' + errData.error.message : ''}`
-        continue
-      }
-
-      const data = await res.json()
-      const candidate = data.candidates?.[0]
-      const text = (candidate?.content?.parts ?? [])
-        .map((p) => p.text)
-        .filter(Boolean)
-        .join(' ')
-
-      // Le texte de réponse peut ne pas contenir l'URL brute (le modèle cite
-      // parfois ses sources uniquement via les métadonnées de grounding) —
-      // on regarde donc aussi les chunks de grounding en plus du texte.
-      const chunkUrls = (candidate?.groundingMetadata?.groundingChunks ?? [])
-        .map((c) => c.web?.uri)
-        .filter(Boolean)
-
-      const match = text.match(/https?:\/\/\S+?\.pdf\b/i)?.[0]
-        ?? chunkUrls.find((u) => /\.pdf(?:[?#]|$)/i.test(u))
-
-      if (match) {
-        return {
-          result: { url: match, type: 'pdf', titreSource: `${titre} — trouvé via recherche Google (Gemini)` },
-        }
-      }
-
-      const grounded = candidate?.groundingMetadata ? 'oui' : 'non'
-      lastDebug = `Gemini+recherche Google: pas d'URL .pdf (grounding actif: ${grounded}, réponse: "${text.slice(0, 120)}")`
-    } catch (err) {
-      lastDebug = `Gemini+recherche Google: erreur — ${err?.message}`
-    }
+  const debugs = []
+  for (const attempt of attempts) {
+    const { result, debug } = await attempt()
+    if (result) return { result }
+    if (debug) debugs.push(debug)
   }
-  return { debug: lastDebug }
+  return { debug: `Internet Archive: ${debugs.join(' / ') || 'aucun résultat'}` }
 }
 
 function decodeHtmlEntities(str) {
@@ -247,7 +188,6 @@ export default async function handler(req, res) {
   const stages = [
     () => searchGutendex(auteur, titre),
     () => searchArchiveOrg(auteur, titre),
-    () => searchViaGeminiGrounding(auteur, titre),
     () => searchDuckDuckGo(searchQuery),
     () => searchBing(searchQuery),
   ]
