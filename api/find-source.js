@@ -1,9 +1,10 @@
-// Cherche une source lisible/téléchargeable pour un livre donné : d'abord
-// Project Gutenberg et Internet Archive (fiables, structurés), puis en
-// dernier recours une recherche web générale (DuckDuckGo, sans clé) pour
-// couvrir les textes que ces deux bibliothèques n'indexent pas mais qu'une
-// simple recherche trouve facilement (éditions universitaires, associations,
-// maisons d'édition qui diffusent librement un texte).
+// Cherche une source lisible/téléchargeable pour un livre donné : Project
+// Gutenberg, Internet Archive, puis deux moteurs de recherche web généraux
+// grattés en HTML (DuckDuckGo puis Bing — aucun des deux ne nécessite de
+// clé). Deux moteurs indépendants au lieu d'un seul : un moteur peut bloquer
+// les requêtes venant d'IP de datacenter (Vercel) sans prévenir, l'autre pas
+// forcément. Chaque étape échouée laisse une trace dans "raison" pour
+// diagnostiquer précisément si tout échoue, plutôt que de deviner.
 
 const FORMAT_PRIORITY = [
   { prefix: 'application/pdf', type: 'pdf' },
@@ -12,26 +13,30 @@ const FORMAT_PRIORITY = [
   { prefix: 'text/plain', type: 'texte' },
 ]
 
+const BROWSER_UA = 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36'
+
 async function searchGutendex(auteur, titre) {
   const q = encodeURIComponent(`${titre} ${auteur}`)
   const res = await fetch(`https://gutendex.com/books?search=${q}`)
-  if (!res.ok) return null
+  if (!res.ok) return { debug: `Gutenberg HTTP ${res.status}` }
   const data = await res.json()
   const book = data.results?.[0]
-  if (!book) return null
+  if (!book) return { debug: 'Gutenberg: aucun résultat' }
 
   const formats = book.formats ?? {}
   for (const { prefix, type } of FORMAT_PRIORITY) {
     const key = Object.keys(formats).find((k) => k.startsWith(prefix))
     if (key) {
       return {
-        url: formats[key],
-        type,
-        titreSource: `${book.title} — Project Gutenberg (domaine public)`,
+        result: {
+          url: formats[key],
+          type,
+          titreSource: `${book.title} — Project Gutenberg (domaine public)`,
+        },
       }
     }
   }
-  return null
+  return { debug: 'Gutenberg: résultat trouvé mais sans format utilisable' }
 }
 
 async function searchArchiveOrg(auteur, titre) {
@@ -39,9 +44,10 @@ async function searchArchiveOrg(auteur, titre) {
   const searchRes = await fetch(
     `https://archive.org/advancedsearch.php?q=${q}&fl[]=identifier&fl[]=title&rows=3&page=1&output=json&mediatype=texts`
   )
-  if (!searchRes.ok) return null
+  if (!searchRes.ok) return { debug: `Internet Archive HTTP ${searchRes.status}` }
   const searchData = await searchRes.json()
   const docs = searchData.response?.docs ?? []
+  if (docs.length === 0) return { debug: 'Internet Archive: aucun résultat' }
 
   for (const doc of docs) {
     const identifier = doc.identifier
@@ -56,22 +62,24 @@ async function searchArchiveOrg(auteur, titre) {
 
     if (pdfFile) {
       return {
-        url: `https://archive.org/download/${identifier}/${encodeURIComponent(pdfFile.name)}`,
-        type: 'pdf',
-        titreSource: `${doc.title ?? titre} — Internet Archive`,
+        result: {
+          url: `https://archive.org/download/${identifier}/${encodeURIComponent(pdfFile.name)}`,
+          type: 'pdf',
+          titreSource: `${doc.title ?? titre} — Internet Archive`,
+        },
       }
     }
   }
-  return null
+  return { debug: `Internet Archive: ${docs.length} résultat(s) mais aucun PDF` }
+}
+
+function decodeHtmlEntities(str) {
+  return str.replace(/&amp;/g, '&').replace(/&#0?39;/g, "'").replace(/&quot;/g, '"')
 }
 
 /** Décode une URL de résultat DuckDuckGo (souvent enveloppée dans /l/?uddg=...). */
 function decodeDuckDuckGoHref(rawHref) {
-  // Le href brut extrait du HTML contient encore les entités HTML (ex. &amp;
-  // entre les paramètres de la query string) — il faut les résoudre avant de
-  // construire une URL, sinon new URL() traite "&amp;autre=..." comme faisant
-  // partie de la valeur du paramètre précédent au lieu d'un séparateur.
-  const href = rawHref.replace(/&amp;/g, '&').replace(/&#0?39;/g, "'").replace(/&quot;/g, '"')
+  const href = decodeHtmlEntities(rawHref)
   try {
     const asUrl = new URL(href, 'https://duckduckgo.com')
     const wrapped = asUrl.searchParams.get('uddg')
@@ -85,29 +93,55 @@ function decodeDuckDuckGoHref(rawHref) {
   }
 }
 
-async function searchDuckDuckGo(auteur, titre) {
-  const query = encodeURIComponent(`${titre} ${auteur} pdf`)
-  const res = await fetch(`https://html.duckduckgo.com/html/?q=${query}`, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36',
-    },
+/** Filet de sécurité indépendant du balisage : cherche n'importe quelle URL
+ * ".pdf" directement dans le HTML brut. Résiste aux changements de classes
+ * CSS ou de structure d'un moteur de recherche. */
+function findRawPdfUrls(html) {
+  const matches = html.match(/https?:\/\/[^\s"'<>()]+\.pdf(?:[?#][^\s"'<>()]*)?/gi) ?? []
+  return matches.map(decodeHtmlEntities)
+}
+
+async function searchDuckDuckGo(query) {
+  const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+    headers: { 'User-Agent': BROWSER_UA },
   })
-  if (!res.ok) return null
+  if (!res.ok) return { debug: `DuckDuckGo HTTP ${res.status}` }
   const html = await res.text()
 
   const hrefRe = /class="result__a"[^>]*href="([^"]+)"/g
-  const candidates = []
+  const structured = []
   let match
   while ((match = hrefRe.exec(html)) !== null) {
     const url = decodeDuckDuckGoHref(match[1])
-    if (url) candidates.push(url)
+    if (url) structured.push(url)
   }
 
-  const pdfUrl = candidates.find((u) => /\.pdf(?:[?#]|$)/i.test(u))
+  const pdfUrl = structured.find((u) => /\.pdf(?:[?#]|$)/i.test(u)) ?? findRawPdfUrls(html)[0]
   if (pdfUrl) {
-    return { url: pdfUrl, type: 'pdf', titreSource: `${titre} — trouvé via recherche web` }
+    return { result: { url: pdfUrl, type: 'pdf', titreSource: 'Trouvé via recherche web (DuckDuckGo)' } }
   }
-  return null
+  return { debug: `DuckDuckGo: ${structured.length} lien(s) mais aucun .pdf` }
+}
+
+async function searchBing(query) {
+  const res = await fetch(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, {
+    headers: { 'User-Agent': BROWSER_UA },
+  })
+  if (!res.ok) return { debug: `Bing HTTP ${res.status}` }
+  const html = await res.text()
+
+  const hrefRe = /<li class="b_algo">[\s\S]{0,400}?<a[^>]+href="([^"]+)"/g
+  const structured = []
+  let match
+  while ((match = hrefRe.exec(html)) !== null) {
+    structured.push(decodeHtmlEntities(match[1]))
+  }
+
+  const pdfUrl = structured.find((u) => /\.pdf(?:[?#]|$)/i.test(u)) ?? findRawPdfUrls(html)[0]
+  if (pdfUrl) {
+    return { result: { url: pdfUrl, type: 'pdf', titreSource: 'Trouvé via recherche web (Bing)' } }
+  }
+  return { debug: `Bing: ${structured.length} lien(s) mais aucun .pdf` }
 }
 
 export default async function handler(req, res) {
@@ -120,27 +154,32 @@ export default async function handler(req, res) {
   const { auteur, titre } = req.body ?? {}
   if (!auteur || !titre) return res.status(400).json({ error: 'MISSING_FIELDS' })
 
-  try {
-    const result = (await searchGutendex(auteur, titre))
-      ?? (await searchArchiveOrg(auteur, titre))
-      ?? (await searchDuckDuckGo(auteur, titre).catch((err) => {
-        console.error('Recherche web (DuckDuckGo) — erreur :', err?.message)
-        return null
-      }))
+  const debugTrail = []
+  const searchQuery = `${titre} ${auteur} pdf`
 
-    if (!result) {
-      return res.status(200).json({
-        url: null,
-        raison: 'Aucune source trouvée automatiquement (Gutenberg, Internet Archive, recherche web).',
-      })
+  const stages = [
+    () => searchGutendex(auteur, titre),
+    () => searchArchiveOrg(auteur, titre),
+    () => searchDuckDuckGo(searchQuery),
+    () => searchBing(searchQuery),
+  ]
+
+  try {
+    for (const stage of stages) {
+      const { result, debug } = await stage().catch((err) => ({ debug: `erreur: ${err?.message}` }))
+      if (result) return res.status(200).json(result)
+      if (debug) debugTrail.push(debug)
     }
 
-    return res.status(200).json(result)
+    return res.status(200).json({
+      url: null,
+      raison: `Aucune source trouvée automatiquement. Détail : ${debugTrail.join(' | ')}`,
+    })
   } catch (err) {
     console.error('Recherche de source — erreur :', err?.message)
     return res.status(200).json({
       url: null,
-      raison: 'La recherche automatique a échoué (service momentanément indisponible).',
+      raison: `La recherche automatique a échoué : ${err?.message ?? 'erreur inconnue'}`,
     })
   }
 }

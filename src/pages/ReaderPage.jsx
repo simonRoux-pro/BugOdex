@@ -6,7 +6,7 @@ import { findSource, proxyUrlFor } from '../services/findSource.js'
 import PdfViewer from '../components/PdfViewer.jsx'
 import NotesPanel from '../components/NotesPanel.jsx'
 
-function SourceIntrouvable({ livre, onRetry, recherche, onManualUrl }) {
+function SourceIntrouvable({ livre, onRetry, recherche, onManualUrl, raison }) {
   const [manualUrl, setManualUrl] = useState('')
   const googleQuery = encodeURIComponent(`${livre.titre} ${livre.auteur} pdf`)
 
@@ -15,6 +15,9 @@ function SourceIntrouvable({ livre, onRetry, recherche, onManualUrl }) {
       <p className="font-serif text-lg">
         {recherche ? 'Aucune source fiable trouvée automatiquement.' : 'Recherche en cours…'}
       </p>
+      {recherche && raison && (
+        <p className="text-xs text-ink-500 dark:text-ink-400 max-w-md">{raison}</p>
+      )}
       {recherche && (
         <>
           <button onClick={onRetry} className="underline text-sm">
@@ -121,6 +124,7 @@ export default function ReaderPage() {
           <SourceIntrouvable
             livre={livre}
             recherche={recherche}
+            raison={progress.source?.raison}
             onRetry={() => {
               setRecherche(false)
               setSource(null)
