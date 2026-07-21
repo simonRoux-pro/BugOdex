@@ -1,10 +1,21 @@
 // Chaîne de repli : chaque modèle a son propre quota gratuit séparé, donc si le
 // premier est momentanément saturé (429), on retente avec le suivant plutôt que
-// d'échouer directement. Uniquement des modèles confirmés disponibles sur
-// l'API v1beta — ne pas ajouter un modèle sans avoir vérifié qu'il répond
-// correctement à generateContent (un modèle retiré renvoie un 404 silencieux
-// qui masque la vraie cause d'un échec précédent).
-const MODELS = ['gemini-2.0-flash', 'gemini-2.0-flash-lite']
+// d'échouer directement. Ne pas ajouter un modèle sans l'avoir vérifié (un
+// modèle retiré renvoie un 404 qui masque la vraie cause d'un échec précédent).
+const MODELS = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-2.5-flash']
+
+// Clés API optionnelles supplémentaires (GOOGLE_AI_KEY_2, GOOGLE_AI_KEY_3, …) —
+// chaque clé Google gratuite a son propre quota, donc en ajouter une seconde
+// (compte Google différent, toujours gratuit, aucune carte requise) multiplie
+// la capacité disponible sans rien changer d'autre.
+function getApiKeys() {
+  const keys = [process.env.GOOGLE_AI_KEY]
+  for (let i = 2; i <= 5; i += 1) {
+    const extra = process.env[`GOOGLE_AI_KEY_${i}`]
+    if (extra) keys.push(extra)
+  }
+  return keys.filter(Boolean)
+}
 
 const PARCOURS_SCHEMA = {
   type: 'OBJECT',
@@ -60,8 +71,8 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
-  const apiKey = process.env.GOOGLE_AI_KEY
-  if (!apiKey) return res.status(500).json({ error: 'NO_API_KEY' })
+  const apiKeys = getApiKeys()
+  if (apiKeys.length === 0) return res.status(500).json({ error: 'NO_API_KEY' })
 
   const theme = (req.body?.theme ?? '').toString().trim()
   if (!theme) return res.status(400).json({ error: 'MISSING_THEME' })
@@ -72,66 +83,70 @@ export default async function handler(req, res) {
   let anyContentBlock = false
   let anyQuota = false
 
-  // On essaie chaque modèle avant d'abandonner : ils ont chacun leur propre
-  // quota, et parfois un seuil de filtrage de contenu légèrement différent.
-  for (const model of MODELS) {
-    try {
-      const geminiRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-            contents: [{ role: 'user', parts: [{ text: `Thème du parcours : "${theme}"` }] }],
-            generationConfig: {
-              responseMimeType: 'application/json',
-              responseSchema: PARCOURS_SCHEMA,
-            },
-          }),
-        }
-      )
-
-      if (!geminiRes.ok) {
-        const errData = await geminiRes.json().catch(() => ({}))
-        throw Object.assign(new Error(errData.error?.message ?? `Gemini HTTP ${geminiRes.status}`), {
-          status: geminiRes.status,
-        })
-      }
-
-      const data = await geminiRes.json()
-      const candidate = data.candidates?.[0]
-
-      if (data.promptFeedback?.blockReason || BLOCK_REASONS.includes(candidate?.finishReason)) {
-        console.error(
-          `Gemini content block (${model}):`,
-          data.promptFeedback?.blockReason ?? candidate?.finishReason
+  // On essaie chaque combinaison clé × modèle avant d'abandonner : chacune a
+  // son propre quota, et les modèles ont parfois un seuil de filtrage de
+  // contenu légèrement différent.
+  for (const apiKey of apiKeys) {
+    for (const model of MODELS) {
+      try {
+        const geminiRes = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+              contents: [{ role: 'user', parts: [{ text: `Thème du parcours : "${theme}"` }] }],
+              generationConfig: {
+                responseMimeType: 'application/json',
+                responseSchema: PARCOURS_SCHEMA,
+              },
+            }),
+          }
         )
-        anyContentBlock = true
-        continue
+
+        if (!geminiRes.ok) {
+          const errData = await geminiRes.json().catch(() => ({}))
+          throw Object.assign(new Error(errData.error?.message ?? `Gemini HTTP ${geminiRes.status}`), {
+            status: geminiRes.status,
+          })
+        }
+
+        const data = await geminiRes.json()
+        const candidate = data.candidates?.[0]
+
+        if (data.promptFeedback?.blockReason || BLOCK_REASONS.includes(candidate?.finishReason)) {
+          console.error(
+            `Gemini content block (${model}):`,
+            data.promptFeedback?.blockReason ?? candidate?.finishReason
+          )
+          anyContentBlock = true
+          continue
+        }
+
+        const text = candidate?.content?.parts?.[0]?.text
+        if (!text) throw Object.assign(new Error('Réponse vide'), { status: 502 })
+
+        const parsed = JSON.parse(text)
+        if (!Array.isArray(parsed.livres) || parsed.livres.length < 10) {
+          throw Object.assign(new Error('Parcours incomplet'), { status: 502 })
+        }
+
+        return res.status(200).json(parsed)
+      } catch (err) {
+        console.error(`Gemini error (${model}):`, err?.message)
+        lastErr = err
+        if (err.status === 429) anyQuota = true
       }
-
-      const text = candidate?.content?.parts?.[0]?.text
-      if (!text) throw Object.assign(new Error('Réponse vide'), { status: 502 })
-
-      const parsed = JSON.parse(text)
-      if (!Array.isArray(parsed.livres) || parsed.livres.length < 10) {
-        throw Object.assign(new Error('Parcours incomplet'), { status: 502 })
-      }
-
-      return res.status(200).json(parsed)
-    } catch (err) {
-      console.error(`Gemini error (${model}):`, err?.message)
-      lastErr = err
-      if (err.status === 429) anyQuota = true
     }
   }
 
-  // Priorité de diagnostic : un quota atteint sur au moins un modèle est le
-  // signal le plus actionnable (réessayer plus tard) ; sinon un blocage de
-  // contenu ; sinon l'erreur technique la plus récente.
+  // Priorité de diagnostic : un quota atteint sur au moins une tentative est
+  // le signal le plus actionnable (réessayer plus tard) ; sinon un blocage de
+  // contenu ; sinon l'erreur technique la plus récente. Le détail réel de
+  // Gemini est toujours renvoyé pour pouvoir diagnostiquer précisément.
   if (anyQuota) {
-    return res.status(429).json({ error: 'QUOTA_DEPASSE' })
+    return res.status(429).json({ error: 'QUOTA_DEPASSE', detail: lastErr?.message })
   }
   if (anyContentBlock) {
     return res.status(422).json({ error: 'REFUSED' })

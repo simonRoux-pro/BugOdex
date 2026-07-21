@@ -32,8 +32,8 @@ export default function HomePage() {
       navigate(`/parcours/${parcours.id}`)
     } catch (err) {
       const base = ERROR_MESSAGES[err.code] ?? err.message ?? 'Erreur inconnue'
-      const detail = err.code === 'GEMINI_ERROR' && err.message ? ` (${err.message})` : ''
-      setError(base + detail)
+      const showDetail = (err.code === 'GEMINI_ERROR' || err.code === 'QUOTA_DEPASSE') && err.message
+      setError(base + (showDetail ? ` (${err.message})` : ''))
     } finally {
       setLoading(false)
     }
