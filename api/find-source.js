@@ -1,5 +1,9 @@
-// Cherche une source lisible/téléchargeable pour un livre donné : Project
-// Gutenberg (via Gutendex) puis Internet Archive.
+// Cherche une source lisible/téléchargeable pour un livre donné : d'abord
+// Project Gutenberg et Internet Archive (fiables, structurés), puis en
+// dernier recours une recherche web générale (DuckDuckGo, sans clé) pour
+// couvrir les textes que ces deux bibliothèques n'indexent pas mais qu'une
+// simple recherche trouve facilement (éditions universitaires, associations,
+// maisons d'édition qui diffusent librement un texte).
 
 const FORMAT_PRIORITY = [
   { prefix: 'application/pdf', type: 'pdf' },
@@ -61,6 +65,51 @@ async function searchArchiveOrg(auteur, titre) {
   return null
 }
 
+/** Décode une URL de résultat DuckDuckGo (souvent enveloppée dans /l/?uddg=...). */
+function decodeDuckDuckGoHref(rawHref) {
+  // Le href brut extrait du HTML contient encore les entités HTML (ex. &amp;
+  // entre les paramètres de la query string) — il faut les résoudre avant de
+  // construire une URL, sinon new URL() traite "&amp;autre=..." comme faisant
+  // partie de la valeur du paramètre précédent au lieu d'un séparateur.
+  const href = rawHref.replace(/&amp;/g, '&').replace(/&#0?39;/g, "'").replace(/&quot;/g, '"')
+  try {
+    const asUrl = new URL(href, 'https://duckduckgo.com')
+    const wrapped = asUrl.searchParams.get('uddg')
+    if (wrapped) {
+      const real = wrapped.startsWith('http') ? wrapped : decodeURIComponent(wrapped)
+      return new URL(real).toString()
+    }
+    return asUrl.protocol.startsWith('http') ? asUrl.toString() : null
+  } catch {
+    return null
+  }
+}
+
+async function searchDuckDuckGo(auteur, titre) {
+  const query = encodeURIComponent(`${titre} ${auteur} pdf`)
+  const res = await fetch(`https://html.duckduckgo.com/html/?q=${query}`, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36',
+    },
+  })
+  if (!res.ok) return null
+  const html = await res.text()
+
+  const hrefRe = /class="result__a"[^>]*href="([^"]+)"/g
+  const candidates = []
+  let match
+  while ((match = hrefRe.exec(html)) !== null) {
+    const url = decodeDuckDuckGoHref(match[1])
+    if (url) candidates.push(url)
+  }
+
+  const pdfUrl = candidates.find((u) => /\.pdf(?:[?#]|$)/i.test(u))
+  if (pdfUrl) {
+    return { url: pdfUrl, type: 'pdf', titreSource: `${titre} — trouvé via recherche web` }
+  }
+  return null
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
@@ -72,12 +121,17 @@ export default async function handler(req, res) {
   if (!auteur || !titre) return res.status(400).json({ error: 'MISSING_FIELDS' })
 
   try {
-    const result = (await searchGutendex(auteur, titre)) ?? (await searchArchiveOrg(auteur, titre))
+    const result = (await searchGutendex(auteur, titre))
+      ?? (await searchArchiveOrg(auteur, titre))
+      ?? (await searchDuckDuckGo(auteur, titre).catch((err) => {
+        console.error('Recherche web (DuckDuckGo) — erreur :', err?.message)
+        return null
+      }))
 
     if (!result) {
       return res.status(200).json({
         url: null,
-        raison: 'Aucune source gratuite trouvée automatiquement sur Gutenberg ou Internet Archive.',
+        raison: 'Aucune source trouvée automatiquement (Gutenberg, Internet Archive, recherche web).',
       })
     }
 
