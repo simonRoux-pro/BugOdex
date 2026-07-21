@@ -107,6 +107,8 @@ Auteur : ${auteur}
 
 Réponds UNIQUEMENT par l'URL directe du PDF (elle doit commencer par http:// ou https:// et se terminer par .pdf), sans aucun autre texte, aucune explication. Si tu ne trouves vraiment aucun lien PDF direct fiable, réponds exactement : NONE`
 
+  let lastDebug = 'Gemini+recherche Google: aucune tentative'
+
   for (const apiKey of apiKeys) {
     try {
       const res = await fetch(
@@ -120,24 +122,42 @@ Réponds UNIQUEMENT par l'URL directe du PDF (elle doit commencer par http:// ou
           }),
         }
       )
-      if (!res.ok) continue
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        lastDebug = `Gemini+recherche Google: HTTP ${res.status}${errData.error?.message ? ' — ' + errData.error.message : ''}`
+        continue
+      }
 
       const data = await res.json()
-      const text = (data.candidates?.[0]?.content?.parts ?? [])
+      const candidate = data.candidates?.[0]
+      const text = (candidate?.content?.parts ?? [])
         .map((p) => p.text)
         .filter(Boolean)
         .join(' ')
-      const match = text.match(/https?:\/\/\S+?\.pdf\b/i)
+
+      // Le texte de réponse peut ne pas contenir l'URL brute (le modèle cite
+      // parfois ses sources uniquement via les métadonnées de grounding) —
+      // on regarde donc aussi les chunks de grounding en plus du texte.
+      const chunkUrls = (candidate?.groundingMetadata?.groundingChunks ?? [])
+        .map((c) => c.web?.uri)
+        .filter(Boolean)
+
+      const match = text.match(/https?:\/\/\S+?\.pdf\b/i)?.[0]
+        ?? chunkUrls.find((u) => /\.pdf(?:[?#]|$)/i.test(u))
+
       if (match) {
         return {
-          result: { url: match[0], type: 'pdf', titreSource: `${titre} — trouvé via recherche Google (Gemini)` },
+          result: { url: match, type: 'pdf', titreSource: `${titre} — trouvé via recherche Google (Gemini)` },
         }
       }
-    } catch {
-      // clé suivante
+
+      const grounded = candidate?.groundingMetadata ? 'oui' : 'non'
+      lastDebug = `Gemini+recherche Google: pas d'URL .pdf (grounding actif: ${grounded}, réponse: "${text.slice(0, 120)}")`
+    } catch (err) {
+      lastDebug = `Gemini+recherche Google: erreur — ${err?.message}`
     }
   }
-  return { debug: 'Gemini+recherche Google: aucun lien PDF trouvé' }
+  return { debug: lastDebug }
 }
 
 function decodeHtmlEntities(str) {
