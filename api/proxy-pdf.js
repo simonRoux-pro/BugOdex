@@ -98,7 +98,10 @@ export default async function handler(req) {
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     upstream = await fetch(current.url, {
       redirect: 'manual',
-      headers: { 'User-Agent': 'ParcoursLecture/1.0 (proxy de lecture personnel)' },
+      // Beaucoup de sites sources bloquent ou dégradent les requêtes dont le
+      // User-Agent ne ressemble pas à un navigateur. On imite un navigateur
+      // mobile réel plutôt que de s'identifier comme un script.
+      headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36' },
     })
 
     if ([301, 302, 303, 307, 308].includes(upstream.status)) {

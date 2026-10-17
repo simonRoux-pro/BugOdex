@@ -8,7 +8,7 @@ const ZOOM_STEP = 0.15
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 3
 
-export default function PdfViewer({ fileUrl, initialPage, initialZoom, onPageChange, onZoomChange }) {
+export default function PdfViewer({ fileUrl, initialPage, initialZoom, onPageChange, onZoomChange, onLoadError }) {
   const canvasRef = useRef(null)
   const pdfRef = useRef(null)
   const renderTaskRef = useRef(null)
@@ -37,12 +37,13 @@ export default function PdfViewer({ fileUrl, initialPage, initialZoom, onPageCha
         console.error('Erreur de chargement du PDF :', err)
         setErrorMessage(err.message)
         setStatus('erreur')
+        onLoadError?.(err.message)
       })
     return () => {
       cancelled = true
       loadingTask.destroy?.()
     }
-  }, [fileUrl])
+  }, [fileUrl]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Rend la page courante
   useEffect(() => {

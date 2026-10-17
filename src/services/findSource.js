@@ -1,5 +1,5 @@
-/** Appelle l'API serverless qui interroge Claude (avec recherche web) pour trouver
- * une source lisible/téléchargeable gratuite d'un livre donné. */
+/** Appelle l'API serverless qui cherche une source lisible/téléchargeable gratuite
+ * d'un livre donné (Project Gutenberg, Internet Archive, puis recherche web). */
 export async function findSource(livre) {
   const res = await fetch('/api/find-source', {
     method: 'POST',

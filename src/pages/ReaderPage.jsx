@@ -55,6 +55,62 @@ function SourceIntrouvable({ livre, onRetry, recherche, onManualUrl, raison }) {
   )
 }
 
+/** Lecteur de repli : affiche le PDF directement via le visualiseur natif du
+ * navigateur (iframe), en pointant sur l'URL d'origine — exactement ce qui
+ * marche déjà quand on ouvre le lien dans un nouvel onglet. Ça ne passe pas
+ * par notre proxy ni par pdf.js, donc ça ne peut pas être bloqué par les
+ * mêmes restrictions. En contrepartie, pas de suivi automatique de page : on
+ * laisse l'utilisateur noter lui-même où il s'est arrêté. */
+function LecteurSimplifie({ source, pageMarquee, onPageMarqueeChange, onReessayer, erreur }) {
+  const [pageSaisie, setPageSaisie] = useState(String(pageMarquee || 1))
+
+  return (
+    <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-ink-200 dark:border-ink-700 bg-white dark:bg-ink-800 dark:text-ink-50 flex-wrap text-sm">
+        <div className="flex items-center gap-2">
+          <span className="text-ink-500 dark:text-ink-400">Mode simplifié —</span>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              const n = Number(pageSaisie)
+              if (n > 0) onPageMarqueeChange(n)
+            }}
+            className="flex items-center gap-1"
+          >
+            Page actuelle :
+            <input
+              type="number"
+              min="1"
+              value={pageSaisie}
+              onChange={(e) => setPageSaisie(e.target.value)}
+              className="w-14 border border-ink-300 dark:border-ink-600 dark:bg-ink-900 rounded px-1 text-center"
+            />
+            <button type="submit" className="underline">Enregistrer</button>
+          </form>
+        </div>
+        <div className="flex items-center gap-3">
+          <a href={source.url} target="_blank" rel="noreferrer" className="underline">
+            Ouvrir dans un nouvel onglet ↗
+          </a>
+          <button onClick={onReessayer} className="underline">
+            Réessayer le lecteur intégré
+          </button>
+        </div>
+      </div>
+      {erreur && (
+        <p className="text-xs text-ink-500 dark:text-ink-400 px-4 py-1 bg-ink-50 dark:bg-ink-900 border-b border-ink-200 dark:border-ink-700">
+          Le lecteur intégré n'a pas pu charger ce document ({erreur}) — affichage direct à la place.
+        </p>
+      )}
+      <iframe
+        src={source.url}
+        title={source.titreSource || 'Document'}
+        className="flex-1 w-full border-0 bg-ink-100 dark:bg-ink-900"
+      />
+    </div>
+  )
+}
+
 export default function ReaderPage() {
   const { parcoursId, livreId } = useParams()
   const parcours = useParcours(parcoursId)
@@ -65,6 +121,9 @@ export default function ReaderPage() {
 
   const [recherche, setRecherche] = useState(false)
   const [erreurRecherche, setErreurRecherche] = useState(null)
+  const [lecteurSimplifie, setLecteurSimplifie] = useState(false)
+  const [erreurLecteur, setErreurLecteur] = useState(null)
+  const [tentative, setTentative] = useState(0)
 
   useEffect(() => {
     // On ne relance la recherche que si on n'a pas encore d'URL utilisable ET
@@ -88,6 +147,13 @@ export default function ReaderPage() {
       cancelled = true
     }
   }, [livre?.id, progress.source?.url, recherche, setSource]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Si la source change (nouvelle recherche, URL manuelle…), on redonne sa
+  // chance au lecteur intégré plutôt que de rester bloqué en mode simplifié.
+  useEffect(() => {
+    setLecteurSimplifie(false)
+    setErreurLecteur(null)
+  }, [progress.source?.url])
 
   if (!parcours || !livre) {
     return (
@@ -133,13 +199,32 @@ export default function ReaderPage() {
           />
         )}
 
-        {progress.source?.url && progress.source.type === 'pdf' && (
+        {progress.source?.url && progress.source.type === 'pdf' && lecteurSimplifie && (
+          <LecteurSimplifie
+            source={progress.source}
+            pageMarquee={progress.pageMarquee}
+            onPageMarqueeChange={setPageMarquee}
+            onReessayer={() => {
+              setLecteurSimplifie(false)
+              setErreurLecteur(null)
+              setTentative((t) => t + 1)
+            }}
+            erreur={erreurLecteur}
+          />
+        )}
+
+        {progress.source?.url && progress.source.type === 'pdf' && !lecteurSimplifie && (
           <PdfViewer
+            key={tentative}
             fileUrl={proxyUrlFor(progress.source.url)}
             initialPage={progress.pageMarquee}
             initialZoom={progress.zoom}
             onPageChange={setPageMarquee}
             onZoomChange={setZoom}
+            onLoadError={(message) => {
+              setErreurLecteur(message)
+              setLecteurSimplifie(true)
+            }}
           />
         )}
 
@@ -170,6 +255,7 @@ export default function ReaderPage() {
           notes={progress.notes}
           onAddNote={addNote}
           onDeleteNote={deleteNote}
+          currentPage={progress.pageMarquee}
         />
       </div>
     </div>

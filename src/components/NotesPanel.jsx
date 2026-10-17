@@ -1,19 +1,25 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
-export default function NotesPanel({ notes, onAddNote, onDeleteNote }) {
-  const suggestion = notes.length === 0
-    ? 'Paragraphe 1'
-    : `Paragraphes 1 à ${notes.length + 1}`
+export default function NotesPanel({ notes, onAddNote, onDeleteNote, currentPage }) {
+  // La portée se cale par défaut sur la page où on en est réellement dans le
+  // document (synchronisée avec le marque-page), plutôt que sur un compteur
+  // de paragraphes déconnecté de la lecture réelle.
+  const suggestion = currentPage ? `Page ${currentPage}` : 'Résumé'
 
   const [portee, setPortee] = useState(suggestion)
   const [texte, setTexte] = useState('')
+  const [porteeModifiee, setPorteeModifiee] = useState(false)
+
+  useEffect(() => {
+    if (!porteeModifiee) setPortee(suggestion)
+  }, [suggestion, porteeModifiee])
 
   const handleSubmit = (e) => {
     e.preventDefault()
     if (!texte.trim()) return
     onAddNote(portee.trim() || suggestion, texte.trim())
     setTexte('')
-    setPortee(`Paragraphes 1 à ${notes.length + 2}`)
+    setPorteeModifiee(false)
   }
 
   return (
@@ -21,8 +27,8 @@ export default function NotesPanel({ notes, onAddNote, onDeleteNote }) {
       <div className="p-4 border-b border-ink-200 dark:border-ink-700">
         <h2 className="font-serif text-lg dark:text-ink-50">Mes résumés</h2>
         <p className="text-xs text-ink-600 dark:text-ink-400 mt-1">
-          Résume ce que tu as compris, étape par étape : d'abord le paragraphe 1, puis 1+2, puis 1+2+3…
-          Ça t'oblige à reformuler et à consolider au fur et à mesure.
+          Note ce que tu as compris à chaque étape, repéré par la page où tu en es.
+          Ça t'oblige à reformuler, et ça te permet de retrouver où tu t'étais arrêté.
         </p>
       </div>
 
@@ -49,8 +55,11 @@ export default function NotesPanel({ notes, onAddNote, onDeleteNote }) {
         <input
           type="text"
           value={portee}
-          onChange={(e) => setPortee(e.target.value)}
-          placeholder="Ex. Paragraphes 1 à 3"
+          onChange={(e) => {
+            setPortee(e.target.value)
+            setPorteeModifiee(true)
+          }}
+          placeholder="Ex. Page 12"
           className="w-full text-xs border border-ink-300 dark:border-ink-700 dark:bg-ink-800 dark:text-ink-50 rounded px-2 py-1"
         />
         <textarea
