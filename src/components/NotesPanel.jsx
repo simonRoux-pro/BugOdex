@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-export default function NotesPanel({ notes, onAddNote, onDeleteNote, suggestionPortee }) {
+export default function NotesPanel({ notes, onAddNote, onDeleteNote, suggestionPortee, open = true, onClose }) {
   // La portée se cale par défaut sur où on en est réellement dans le document
   // (marque-page ou position de lecture), plutôt que sur un compteur de
   // paragraphes déconnecté de la lecture réelle.
@@ -23,13 +23,24 @@ export default function NotesPanel({ notes, onAddNote, onDeleteNote, suggestionP
   }
 
   return (
-    <aside className="w-full md:w-80 shrink-0 border-l border-ink-200 dark:border-ink-700 bg-ink-50 dark:bg-ink-900 flex flex-col h-full">
-      <div className="p-4 border-b border-ink-200 dark:border-ink-700">
-        <h2 className="font-serif text-lg dark:text-ink-50">Mes résumés</h2>
-        <p className="text-xs text-ink-600 dark:text-ink-400 mt-1">
-          Note ce que tu as compris à chaque étape, repéré par la page où tu en es.
-          Ça t'oblige à reformuler, et ça te permet de retrouver où tu t'étais arrêté.
-        </p>
+    <aside
+      className={`${open ? 'flex' : 'hidden'} md:flex flex-col fixed md:relative bottom-0 inset-x-0 md:inset-auto z-20 md:z-auto w-full md:w-80 shrink-0 h-[55vh] md:h-full border-t md:border-t-0 md:border-l border-ink-200 dark:border-ink-700 bg-ink-50 dark:bg-ink-900 shadow-2xl md:shadow-none`}
+    >
+      <div className="p-4 border-b border-ink-200 dark:border-ink-700 flex items-start justify-between gap-2">
+        <div>
+          <h2 className="font-serif text-lg dark:text-ink-50">Mes résumés</h2>
+          <p className="text-xs text-ink-600 dark:text-ink-400 mt-1">
+            Note ce que tu as compris à chaque étape, repéré par la page où tu en es.
+            Ça t'oblige à reformuler, et ça te permet de retrouver où tu t'étais arrêté.
+          </p>
+        </div>
+        <button
+          onClick={onClose}
+          className="md:hidden text-ink-400 hover:text-ink-700 dark:hover:text-ink-100 shrink-0 text-lg leading-none"
+          aria-label="Fermer les résumés"
+        >
+          ✕
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">

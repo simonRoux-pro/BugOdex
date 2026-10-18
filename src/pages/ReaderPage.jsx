@@ -202,6 +202,7 @@ export default function ReaderPage() {
   const [lecteurSimplifie, setLecteurSimplifie] = useState(false)
   const [erreurLecteur, setErreurLecteur] = useState(null)
   const [tentative, setTentative] = useState(0)
+  const [notesOuvertes, setNotesOuvertes] = useState(false)
 
   useEffect(() => {
     // On ne relance la recherche que si on n'a pas encore d'URL utilisable ET
@@ -255,6 +256,12 @@ export default function ReaderPage() {
             {livre.titre} <span className="text-ink-500 dark:text-ink-400 font-sans text-sm">— {livre.auteur}</span>
           </h1>
         </div>
+        <button
+          onClick={() => setNotesOuvertes(true)}
+          className="md:hidden shrink-0 ml-2 text-sm border border-ink-300 dark:border-ink-600 rounded px-2 py-1 dark:text-ink-50"
+        >
+          📝 {progress.notes.length > 0 ? progress.notes.length : ''}
+        </button>
       </div>
 
       <div className="flex flex-1 min-h-0 flex-col md:flex-row">
@@ -344,6 +351,8 @@ export default function ReaderPage() {
           notes={progress.notes}
           onAddNote={addNote}
           onDeleteNote={deleteNote}
+          open={notesOuvertes}
+          onClose={() => setNotesOuvertes(false)}
           suggestionPortee={
             progress.source?.type === 'pdf'
               ? `Page ${progress.pageMarquee}`
