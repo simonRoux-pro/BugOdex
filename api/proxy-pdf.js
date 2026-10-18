@@ -19,6 +19,7 @@ const MAX_REDIRECTS = 5
 // en cross-origin qu'en same-origin — pas besoin d'accès direct au DOM.
 const SCROLL_SCRIPT = `<script>(function(){
 function ratio(){var el=document.scrollingElement||document.documentElement;var max=(el.scrollHeight-el.clientHeight)||1;return Math.max(0,Math.min(1,el.scrollTop/max));}
+function send(){try{parent.postMessage({source:'parcours-lecture',scrollRatio:ratio()},'*');}catch(e){}}
 var params=new URLSearchParams(location.search);
 var initial=parseFloat(params.get('scrollRatio'));
 if(!isNaN(initial)&&initial>0){
@@ -29,8 +30,14 @@ if(!isNaN(initial)&&initial>0){
 var t=null;
 window.addEventListener('scroll',function(){
   clearTimeout(t);
-  t=setTimeout(function(){try{parent.postMessage({source:'parcours-lecture',scrollRatio:ratio()},'*');}catch(e){}},400);
+  t=setTimeout(send,400);
 },{passive:true});
+// Le debounce sur "scroll" peut ne jamais se déclencher si l'app est
+// fermée/mise en arrière-plan juste après avoir arrêté de défiler (cas très
+// courant sur mobile) : on force l'envoi immédiat dès que la page devient
+// cachée ou va se décharger, pour ne jamais perdre la dernière position.
+document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden'){clearTimeout(t);send();}});
+window.addEventListener('pagehide',send);
 })();</script>`
 
 function injectScrollTracking(html, baseUrl) {
