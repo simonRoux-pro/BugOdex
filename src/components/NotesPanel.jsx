@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-export default function NotesPanel({ notes, onAddNote, onDeleteNote, suggestionPortee, open = true, onClose }) {
+export default function NotesPanel({ notes, onAddNote, onDeleteNote, suggestionPortee, open = true, onClose, pleinEcran = false }) {
   // La portée se cale par défaut sur où on en est réellement dans le document
   // (marque-page ou position de lecture), plutôt que sur un compteur de
   // paragraphes déconnecté de la lecture réelle.
@@ -22,10 +22,15 @@ export default function NotesPanel({ notes, onAddNote, onDeleteNote, suggestionP
     setPorteeModifiee(false)
   }
 
+  // En plein écran, le panneau est un tiroir qu'on ouvre/ferme sur toutes les
+  // tailles d'écran (pas de barre latérale toujours visible comme en mode
+  // normal sur desktop) : un vrai plein écran ne doit rien afficher en trop.
+  const className = pleinEcran
+    ? `${open ? 'flex' : 'hidden'} flex-col fixed bottom-0 inset-x-0 z-20 w-full h-[55vh] border-t border-ink-200 dark:border-ink-700 bg-ink-50 dark:bg-ink-900 shadow-2xl`
+    : `${open ? 'flex' : 'hidden'} md:flex flex-col fixed md:relative bottom-0 inset-x-0 md:inset-auto z-20 md:z-auto w-full md:w-80 shrink-0 h-[55vh] md:h-full border-t md:border-t-0 md:border-l border-ink-200 dark:border-ink-700 bg-ink-50 dark:bg-ink-900 shadow-2xl md:shadow-none`
+
   return (
-    <aside
-      className={`${open ? 'flex' : 'hidden'} md:flex flex-col fixed md:relative bottom-0 inset-x-0 md:inset-auto z-20 md:z-auto w-full md:w-80 shrink-0 h-[55vh] md:h-full border-t md:border-t-0 md:border-l border-ink-200 dark:border-ink-700 bg-ink-50 dark:bg-ink-900 shadow-2xl md:shadow-none`}
-    >
+    <aside className={className}>
       <div className="p-4 border-b border-ink-200 dark:border-ink-700 flex items-start justify-between gap-2">
         <div>
           <h2 className="font-serif text-lg dark:text-ink-50">Mes résumés</h2>
@@ -36,7 +41,7 @@ export default function NotesPanel({ notes, onAddNote, onDeleteNote, suggestionP
         </div>
         <button
           onClick={onClose}
-          className="md:hidden text-ink-400 hover:text-ink-700 dark:hover:text-ink-100 shrink-0 text-lg leading-none"
+          className={`${pleinEcran ? '' : 'md:hidden'} text-ink-400 hover:text-ink-700 dark:hover:text-ink-100 shrink-0 text-lg leading-none`}
           aria-label="Fermer les résumés"
         >
           ✕

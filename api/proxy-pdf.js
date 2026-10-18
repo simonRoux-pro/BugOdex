@@ -122,6 +122,24 @@ export default async function handler(req) {
     })
   }
 
+  // Tout le reste (réseau vers le site source, lecture du corps, injection
+  // dans le HTML) peut échouer de façon inattendue et imprévisible (panne
+  // momentanée, flux interrompu…). Sans ce filet, une telle erreur fait
+  // planter toute la fonction Edge (500 FUNCTION_INVOCATION_FAILED) au lieu
+  // de renvoyer une erreur exploitable par l'appli.
+  try {
+    return await proxyRequest(current, corsHeaders)
+  } catch (err) {
+    console.error('proxy-pdf — erreur inattendue :', err?.message)
+    return new Response(JSON.stringify({ error: 'ERREUR_PROXY', detail: err?.message ?? 'erreur inconnue' }), {
+      status: 502,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    })
+  }
+}
+
+async function proxyRequest(initial, corsHeaders) {
+  let current = initial
   let upstream
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     upstream = await fetch(current.url, {
@@ -165,9 +183,16 @@ export default async function handler(req) {
 
   if (contentType === 'text/html') {
     // Pages HTML : on les bufferise (elles sont petites, contrairement aux PDF)
-    // pour y injecter le suivi de position de lecture.
+    // pour y injecter le suivi de position de lecture. Si l'injection échoue
+    // pour une raison quelconque, on sert quand même la page telle quelle
+    // (juste sans le suivi automatique) plutôt que de faire échouer la lecture.
     const html = await upstream.text()
-    const withTracking = injectScrollTracking(html, current.url.toString())
+    let withTracking = html
+    try {
+      withTracking = injectScrollTracking(html, current.url.toString())
+    } catch (err) {
+      console.error('injectScrollTracking a échoué :', err?.message)
+    }
     return new Response(withTracking, {
       status: 200,
       headers: {

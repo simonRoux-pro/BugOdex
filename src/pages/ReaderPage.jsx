@@ -123,6 +123,17 @@ function LecteurHtml({ source, scrollRatio, onScrollRatioChange }) {
   const iframeRef = useRef(null)
   const [useProxy, setUseProxy] = useState(true)
   const [pourcentageSaisi, setPourcentageSaisi] = useState(String(Math.round((scrollRatio || 0) * 100)))
+  // L'URL de l'iframe est figée au montage : si elle dépendait de scrollRatio
+  // (mis à jour en continu pendant la lecture), l'iframe se rechargerait et
+  // sauterait à chaque fois que la position est sauvegardée. La position
+  // initiale ne sert qu'à l'ouverture.
+  const srcRef = useRef(null)
+  if (srcRef.current === null) {
+    srcRef.current = {
+      proxied: proxyUrlFor(source.url, { scrollRatio: scrollRatio || 0 }),
+      direct: source.url,
+    }
+  }
 
   useEffect(() => {
     function handleMessage(e) {
@@ -180,7 +191,7 @@ function LecteurHtml({ source, scrollRatio, onScrollRatioChange }) {
       </div>
       <iframe
         ref={iframeRef}
-        src={useProxy ? proxyUrlFor(source.url, { scrollRatio: scrollRatio || 0 }) : source.url}
+        src={useProxy ? srcRef.current.proxied : srcRef.current.direct}
         onLoad={handleLoad}
         title={source.titreSource || 'Document'}
         className="flex-1 w-full border-0 bg-white"
@@ -204,10 +215,30 @@ export default function ReaderPage() {
   const [tentative, setTentative] = useState(0)
   const [notesOuvertes, setNotesOuvertes] = useState(false)
   const [pleinEcran, setPleinEcran] = useState(false)
+  const [filtreLecture, setFiltreLecture] = useState(() => {
+    try {
+      return localStorage.getItem('parcours-lecture:filtre-lecture') === '1'
+    } catch {
+      return false
+    }
+  })
+
+  const toggleFiltreLecture = () => {
+    setFiltreLecture((v) => {
+      const next = !v
+      try {
+        localStorage.setItem('parcours-lecture:filtre-lecture', next ? '1' : '0')
+      } catch {
+        // stockage indisponible (navigation privée…) : la préférence ne sera pas retenue.
+      }
+      return next
+    })
+  }
 
   const togglePleinEcran = () => {
     setPleinEcran((v) => {
       const next = !v
+      if (next) setNotesOuvertes(false) // vrai plein écran : aucun panneau visible à l'entrée
       try {
         if (next) document.documentElement.requestFullscreen?.()?.catch(() => {})
         else if (document.fullscreenElement) document.exitFullscreen?.()?.catch(() => {})
@@ -284,6 +315,13 @@ export default function ReaderPage() {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
+              onClick={toggleFiltreLecture}
+              className={`text-sm border rounded px-2 py-1 ${filtreLecture ? 'bg-amber-200 border-amber-400 text-ink-900' : 'border-ink-300 dark:border-ink-600 dark:text-ink-50'}`}
+              aria-label="Filtre lecture (confort des yeux)"
+            >
+              🕯️
+            </button>
+            <button
               onClick={togglePleinEcran}
               className="text-sm border border-ink-300 dark:border-ink-600 rounded px-2 py-1 dark:text-ink-50"
               aria-label="Plein écran"
@@ -303,8 +341,15 @@ export default function ReaderPage() {
       {pleinEcran && (
         <div className="absolute top-2 right-2 z-10 flex gap-2">
           <button
+            onClick={toggleFiltreLecture}
+            className={`text-sm rounded px-2 py-1 ${filtreLecture ? 'bg-amber-200 text-ink-900' : 'bg-black/60 text-white'}`}
+            aria-label="Filtre lecture (confort des yeux)"
+          >
+            🕯️
+          </button>
+          <button
             onClick={() => setNotesOuvertes(true)}
-            className="md:hidden text-sm bg-black/60 text-white rounded px-2 py-1"
+            className="text-sm bg-black/60 text-white rounded px-2 py-1"
           >
             📝 {progress.notes.length > 0 ? progress.notes.length : ''}
           </button>
@@ -319,6 +364,10 @@ export default function ReaderPage() {
       )}
 
       <div className="flex flex-1 min-h-0 flex-col md:flex-row">
+        <div
+          className="flex-1 flex flex-col min-h-0"
+          style={filtreLecture ? { filter: 'sepia(0.3) saturate(0.85) brightness(0.92) contrast(0.95)' } : undefined}
+        >
         {erreurRecherche && !progress.source?.url && (
           <div className="flex-1 flex items-center justify-center text-red-600 text-sm p-8">
             {erreurRecherche}
@@ -400,6 +449,7 @@ export default function ReaderPage() {
             </button>
           </div>
         )}
+        </div>
 
         <NotesPanel
           notes={progress.notes}
@@ -407,6 +457,7 @@ export default function ReaderPage() {
           onDeleteNote={deleteNote}
           open={notesOuvertes}
           onClose={() => setNotesOuvertes(false)}
+          pleinEcran={pleinEcran}
           suggestionPortee={
             progress.source?.type === 'pdf'
               ? `Page ${progress.pageMarquee}`
