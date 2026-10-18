@@ -203,6 +203,31 @@ export default function ReaderPage() {
   const [erreurLecteur, setErreurLecteur] = useState(null)
   const [tentative, setTentative] = useState(0)
   const [notesOuvertes, setNotesOuvertes] = useState(false)
+  const [pleinEcran, setPleinEcran] = useState(false)
+
+  const togglePleinEcran = () => {
+    setPleinEcran((v) => {
+      const next = !v
+      try {
+        if (next) document.documentElement.requestFullscreen?.()?.catch(() => {})
+        else if (document.fullscreenElement) document.exitFullscreen?.()?.catch(() => {})
+      } catch {
+        // API plein écran non supportée (ex. Safari iOS) : on garde quand même
+        // le mode plein écran "maison" (sans la barre de titre de l'appli).
+      }
+      return next
+    })
+  }
+
+  // Si le plein écran natif est quitté autrement (geste système, touche
+  // Échap…), on resynchronise notre propre état.
+  useEffect(() => {
+    const handler = () => {
+      if (!document.fullscreenElement) setPleinEcran(false)
+    }
+    document.addEventListener('fullscreenchange', handler)
+    return () => document.removeEventListener('fullscreenchange', handler)
+  }, [])
 
   useEffect(() => {
     // On ne relance la recherche que si on n'a pas encore d'URL utilisable ET
@@ -246,23 +271,52 @@ export default function ReaderPage() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-56px)]">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-ink-200 dark:border-ink-700 bg-white dark:bg-ink-800">
-        <div className="min-w-0">
-          <Link to={`/parcours/${parcoursId}`} className="text-xs text-ink-500 dark:text-ink-400 hover:underline">
-            ← {parcours.titre}
-          </Link>
-          <h1 className="font-serif truncate dark:text-ink-50">
-            {livre.titre} <span className="text-ink-500 dark:text-ink-400 font-sans text-sm">— {livre.auteur}</span>
-          </h1>
+    <div className={pleinEcran ? 'fixed inset-0 z-40 flex flex-col h-[100dvh] bg-white dark:bg-ink-900' : 'flex flex-col h-[calc(100vh-56px)]'}>
+      {!pleinEcran && (
+        <div className="flex items-center justify-between px-4 py-2 border-b border-ink-200 dark:border-ink-700 bg-white dark:bg-ink-800">
+          <div className="min-w-0">
+            <Link to={`/parcours/${parcoursId}`} className="text-xs text-ink-500 dark:text-ink-400 hover:underline">
+              ← {parcours.titre}
+            </Link>
+            <h1 className="font-serif truncate dark:text-ink-50">
+              {livre.titre} <span className="text-ink-500 dark:text-ink-400 font-sans text-sm">— {livre.auteur}</span>
+            </h1>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={togglePleinEcran}
+              className="text-sm border border-ink-300 dark:border-ink-600 rounded px-2 py-1 dark:text-ink-50"
+              aria-label="Plein écran"
+            >
+              ⛶
+            </button>
+            <button
+              onClick={() => setNotesOuvertes(true)}
+              className="md:hidden text-sm border border-ink-300 dark:border-ink-600 rounded px-2 py-1 dark:text-ink-50"
+            >
+              📝 {progress.notes.length > 0 ? progress.notes.length : ''}
+            </button>
+          </div>
         </div>
-        <button
-          onClick={() => setNotesOuvertes(true)}
-          className="md:hidden shrink-0 ml-2 text-sm border border-ink-300 dark:border-ink-600 rounded px-2 py-1 dark:text-ink-50"
-        >
-          📝 {progress.notes.length > 0 ? progress.notes.length : ''}
-        </button>
-      </div>
+      )}
+
+      {pleinEcran && (
+        <div className="absolute top-2 right-2 z-10 flex gap-2">
+          <button
+            onClick={() => setNotesOuvertes(true)}
+            className="md:hidden text-sm bg-black/60 text-white rounded px-2 py-1"
+          >
+            📝 {progress.notes.length > 0 ? progress.notes.length : ''}
+          </button>
+          <button
+            onClick={togglePleinEcran}
+            className="text-sm bg-black/60 text-white rounded px-2 py-1"
+            aria-label="Quitter le plein écran"
+          >
+            ✕ Quitter le plein écran
+          </button>
+        </div>
+      )}
 
       <div className="flex flex-1 min-h-0 flex-col md:flex-row">
         {erreurRecherche && !progress.source?.url && (
