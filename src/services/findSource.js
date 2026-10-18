@@ -5,6 +5,24 @@ const FORMAT_PRIORITY = [
   { prefix: 'text/plain', type: 'texte' },
 ]
 
+// fetch() n'a pas de délai par défaut dans les navigateurs : une connexion
+// qui ne répond jamais (filtrée silencieusement plutôt que refusée) bloque
+// la recherche indéfiniment. On borne donc chaque requête explicitement.
+async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...options, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function describeFetchError(err, timeoutMs) {
+  if (err.name === 'AbortError') return `délai dépassé (${Math.round(timeoutMs / 1000)}s)`
+  return err.message
+}
+
 /** Project Gutenberg et Internet Archive exposent des API JSON ouvertes au
  * navigateur (CORS autorisé) : on les interroge directement depuis le
  * navigateur, avec l'IP de l'utilisateur — jamais bloquée, contrairement à
@@ -14,7 +32,7 @@ const FORMAT_PRIORITY = [
 async function searchGutendexClient(auteur, titre) {
   try {
     const q = encodeURIComponent(`${titre} ${auteur}`)
-    const res = await fetch(`https://gutendex.com/books?search=${q}`)
+    const res = await fetchWithTimeout(`https://gutendex.com/books?search=${q}`)
     if (!res.ok) return { debug: `Gutenberg HTTP ${res.status}` }
     const data = await res.json()
     const book = data.results?.[0]
@@ -35,14 +53,14 @@ async function searchGutendexClient(auteur, titre) {
     }
     return { debug: 'Gutenberg: résultat trouvé mais sans format utilisable' }
   } catch (err) {
-    return { debug: `Gutenberg (navigateur): ${err.message}` }
+    return { debug: `Gutenberg (navigateur): ${describeFetchError(err, 8000)}` }
   }
 }
 
 async function queryArchiveOrgClient(query) {
   try {
     const q = encodeURIComponent(query)
-    const searchRes = await fetch(
+    const searchRes = await fetchWithTimeout(
       `https://archive.org/advancedsearch.php?q=${q}&fl[]=identifier&fl[]=title&rows=3&page=1&output=json&mediatype=texts`
     )
     if (!searchRes.ok) return { debug: `Internet Archive HTTP ${searchRes.status}` }
@@ -53,7 +71,7 @@ async function queryArchiveOrgClient(query) {
     for (const doc of docs) {
       const identifier = doc.identifier
       if (!identifier) continue
-      const metaRes = await fetch(`https://archive.org/metadata/${identifier}`)
+      const metaRes = await fetchWithTimeout(`https://archive.org/metadata/${identifier}`)
       if (!metaRes.ok) continue
       const meta = await metaRes.json()
       const files = meta.files ?? []
@@ -73,7 +91,7 @@ async function queryArchiveOrgClient(query) {
     }
     return { debug: `${docs.length} résultat(s) mais aucun PDF` }
   } catch (err) {
-    return { debug: `Internet Archive (navigateur): ${err.message}` }
+    return { debug: `Internet Archive (navigateur): ${describeFetchError(err, 8000)}` }
   }
 }
 
@@ -96,17 +114,23 @@ async function searchArchiveOrgClient(auteur, titre) {
   return { debug: `Internet Archive: ${debugs.join(' / ') || 'aucun résultat'}` }
 }
 
+const SERVER_SEARCH_TIMEOUT_MS = 25000 // le serveur enchaîne plusieurs étapes de recherche
+
 async function requestServerSource(livre) {
-  const res = await fetch('/api/find-source', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      auteur: livre.auteur,
-      titre: livre.titre,
-      annee: livre.annee,
-      motsClesRecherche: livre.motsClesRecherche,
-    }),
-  })
+  const res = await fetchWithTimeout(
+    '/api/find-source',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        auteur: livre.auteur,
+        titre: livre.titre,
+        annee: livre.annee,
+        motsClesRecherche: livre.motsClesRecherche,
+      }),
+    },
+    SERVER_SEARCH_TIMEOUT_MS
+  )
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({}))
@@ -134,12 +158,17 @@ export async function findSource(livre) {
   if (archive.result) return archive.result
   if (archive.debug) debugTrail.push(archive.debug)
 
-  const serverResult = await requestServerSource(livre)
-  if (serverResult.url) return serverResult
+  try {
+    const serverResult = await requestServerSource(livre)
+    if (serverResult.url) return serverResult
+    debugTrail.push(serverResult.raison)
+  } catch (err) {
+    debugTrail.push(`Recherche serveur : ${describeFetchError(err, SERVER_SEARCH_TIMEOUT_MS)}`)
+  }
 
   return {
     url: null,
-    raison: [...debugTrail, serverResult.raison].filter(Boolean).join(' | '),
+    raison: debugTrail.filter(Boolean).join(' | ') || 'Aucune source trouvée.',
   }
 }
 

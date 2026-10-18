@@ -61,14 +61,14 @@ function SourceIntrouvable({ livre, onRetry, recherche, onManualUrl, raison }) {
  * par notre proxy ni par pdf.js, donc ça ne peut pas être bloqué par les
  * mêmes restrictions. En contrepartie, pas de suivi automatique de page : on
  * laisse l'utilisateur noter lui-même où il s'est arrêté. */
-function LecteurSimplifie({ source, pageMarquee, onPageMarqueeChange, onReessayer, erreur }) {
+function LecteurSimplifie({ source, pageMarquee, onPageMarqueeChange, onReessayer, erreur, titreMode = 'Mode simplifié' }) {
   const [pageSaisie, setPageSaisie] = useState(String(pageMarquee || 1))
 
   return (
     <div className="flex-1 flex flex-col min-w-0">
       <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-ink-200 dark:border-ink-700 bg-white dark:bg-ink-800 dark:text-ink-50 flex-wrap text-sm">
         <div className="flex items-center gap-2">
-          <span className="text-ink-500 dark:text-ink-400">Mode simplifié —</span>
+          <span className="text-ink-500 dark:text-ink-400">{titreMode} —</span>
           <form
             onSubmit={(e) => {
               e.preventDefault()
@@ -92,9 +92,11 @@ function LecteurSimplifie({ source, pageMarquee, onPageMarqueeChange, onReessaye
           <a href={source.url} target="_blank" rel="noreferrer" className="underline">
             Ouvrir dans un nouvel onglet ↗
           </a>
-          <button onClick={onReessayer} className="underline">
-            Réessayer le lecteur intégré
-          </button>
+          {onReessayer && (
+            <button onClick={onReessayer} className="underline">
+              Réessayer le lecteur intégré
+            </button>
+          )}
         </div>
       </div>
       {erreur && (
@@ -228,10 +230,19 @@ export default function ReaderPage() {
           />
         )}
 
-        {progress.source?.url && progress.source.type !== 'pdf' && (
+        {progress.source?.url && (progress.source.type === 'html' || progress.source.type === 'texte') && (
+          <LecteurSimplifie
+            source={progress.source}
+            pageMarquee={progress.pageMarquee}
+            onPageMarqueeChange={setPageMarquee}
+            titreMode="Lecture intégrée"
+          />
+        )}
+
+        {progress.source?.url && progress.source.type === 'epub' && (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-center">
             <p className="font-serif text-lg">
-              Une source a été trouvée, mais le lecteur intégré ne gère que les PDF pour l'instant.
+              Une source a été trouvée au format EPUB, que le lecteur intégré ne gère pas encore.
             </p>
             <p className="text-sm text-ink-500 dark:text-ink-400">{progress.source.titreSource}</p>
             <a
