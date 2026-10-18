@@ -254,7 +254,10 @@ export default function ReaderPage() {
               Ouvrir la source dans un nouvel onglet →
             </a>
             <button
-              onClick={() => setSource(null)}
+              onClick={() => {
+                setRecherche(false)
+                setSource(null)
+              }}
               className="text-xs text-ink-500 underline"
             >
               Chercher une autre source

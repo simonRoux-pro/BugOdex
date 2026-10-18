@@ -10,11 +10,14 @@
 // donc inutilisable sans facturation. Chaque étape échouée laisse une trace
 // dans "raison" pour diagnostiquer précisément si tout échoue.
 
+// L'EPUB est classé en dernier : le lecteur intégré ne sait pas l'afficher
+// (contrairement au PDF, au HTML et au texte brut). Voir la même constante
+// côté client (src/services/findSource.js) pour le détail.
 const FORMAT_PRIORITY = [
   { prefix: 'application/pdf', type: 'pdf' },
-  { prefix: 'application/epub+zip', type: 'epub' },
   { prefix: 'text/html', type: 'html' },
   { prefix: 'text/plain', type: 'texte' },
+  { prefix: 'application/epub+zip', type: 'epub' },
 ]
 
 const BROWSER_UA = 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Mobile Safari/537.36'

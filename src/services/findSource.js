@@ -1,8 +1,14 @@
+// L'EPUB est classé en dernier : le lecteur intégré sait afficher le PDF, le
+// HTML et le texte brut directement (simple iframe), mais pas l'EPUB (format
+// zip qu'un navigateur ne rend pas nativement). Gutenberg propose presque
+// toujours plusieurs formats pour un même livre ; autant choisir celui qu'on
+// peut vraiment lire dans l'application plutôt que de tomber sur un EPUB
+// alors qu'une version HTML existait dans la même réponse.
 const FORMAT_PRIORITY = [
   { prefix: 'application/pdf', type: 'pdf' },
-  { prefix: 'application/epub+zip', type: 'epub' },
   { prefix: 'text/html', type: 'html' },
   { prefix: 'text/plain', type: 'texte' },
+  { prefix: 'application/epub+zip', type: 'epub' },
 ]
 
 // fetch() n'a pas de délai par défaut dans les navigateurs : une connexion
