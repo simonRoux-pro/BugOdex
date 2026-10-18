@@ -10,6 +10,7 @@ function defaultProgress() {
   return {
     pageMarquee: 1,
     zoom: 1,
+    scrollRatio: 0, // position de lecture (0 à 1) pour les sources HTML/texte, sans notion de page
     notes: [], // [{ id, portee: 'Paragraphes 1 à 3', texte, creeLe }]
     source: null, // { url, type, sourceNote } — mis en cache après recherche
   }
@@ -50,6 +51,10 @@ export function useBookProgress(parcoursId, livreId) {
     persist({ ...progress, zoom })
   }, [progress, persist])
 
+  const setScrollRatio = useCallback((scrollRatio) => {
+    persist({ ...progress, scrollRatio })
+  }, [progress, persist])
+
   const setSource = useCallback((source) => {
     persist({ ...progress, source })
   }, [progress, persist])
@@ -63,5 +68,5 @@ export function useBookProgress(parcoursId, livreId) {
     persist({ ...progress, notes: progress.notes.filter((n) => n.id !== noteId) })
   }, [progress, persist])
 
-  return { progress, setPageMarquee, setZoom, setSource, addNote, deleteNote }
+  return { progress, setPageMarquee, setZoom, setScrollRatio, setSource, addNote, deleteNote }
 }

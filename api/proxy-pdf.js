@@ -13,6 +13,34 @@ const ALLOWED_CONTENT_TYPES = [
 
 const MAX_REDIRECTS = 5
 
+// Injecté dans les pages HTML proxyées pour retenir et restaurer la position
+// de lecture (en proportion du document, indépendante de la taille d'écran).
+// On communique avec la page parente via postMessage, qui marche aussi bien
+// en cross-origin qu'en same-origin — pas besoin d'accès direct au DOM.
+const SCROLL_SCRIPT = `<script>(function(){
+function ratio(){var el=document.scrollingElement||document.documentElement;var max=(el.scrollHeight-el.clientHeight)||1;return Math.max(0,Math.min(1,el.scrollTop/max));}
+var params=new URLSearchParams(location.search);
+var initial=parseFloat(params.get('scrollRatio'));
+if(!isNaN(initial)&&initial>0){
+  window.addEventListener('load',function(){
+    setTimeout(function(){var el=document.scrollingElement||document.documentElement;el.scrollTop=initial*(el.scrollHeight-el.clientHeight);},80);
+  });
+}
+var t=null;
+window.addEventListener('scroll',function(){
+  clearTimeout(t);
+  t=setTimeout(function(){try{parent.postMessage({source:'parcours-lecture',scrollRatio:ratio()},'*');}catch(e){}},400);
+},{passive:true});
+})();</script>`
+
+function injectScrollTracking(html, baseUrl) {
+  let out = html
+  const baseTag = `<base href="${baseUrl}">`
+  out = /<head[^>]*>/i.test(out) ? out.replace(/<head[^>]*>/i, (m) => `${m}${baseTag}`) : baseTag + out
+  out = /<\/body>/i.test(out) ? out.replace(/<\/body>/i, `${SCROLL_SCRIPT}</body>`) : out + SCROLL_SCRIPT
+  return out
+}
+
 /**
  * Vérifie si un hostname/IP cible une ressource interne/privée (protection SSRF).
  * Ceci est une protection best-effort basée sur le nom d'hôte littéral : elle bloque
@@ -132,6 +160,21 @@ export default async function handler(req) {
     return new Response(JSON.stringify({ error: 'TYPE_CONTENU_NON_AUTORISE', contentType }), {
       status: 415,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    })
+  }
+
+  if (contentType === 'text/html') {
+    // Pages HTML : on les bufferise (elles sont petites, contrairement aux PDF)
+    // pour y injecter le suivi de position de lecture.
+    const html = await upstream.text()
+    const withTracking = injectScrollTracking(html, current.url.toString())
+    return new Response(withTracking, {
+      status: 200,
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'public, max-age=86400',
+      },
     })
   }
 

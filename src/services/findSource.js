@@ -179,6 +179,7 @@ export async function findSource(livre) {
 }
 
 /** Construit l'URL du proxy pour lire un document distant sans être bloqué par le CORS. */
-export function proxyUrlFor(remoteUrl) {
-  return `/api/proxy-pdf?url=${encodeURIComponent(remoteUrl)}`
+export function proxyUrlFor(remoteUrl, extraParams = {}) {
+  const params = new URLSearchParams({ url: remoteUrl, ...extraParams })
+  return `/api/proxy-pdf?${params.toString()}`
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useParcours } from '../hooks/useParcours.js'
 import { useBookProgress } from '../hooks/useBookProgress.js'
@@ -113,12 +113,88 @@ function LecteurSimplifie({ source, pageMarquee, onPageMarqueeChange, onReessaye
   )
 }
 
+/** Lecteur pour les sources HTML/texte : passe par notre proxy pour pouvoir y
+ * injecter un suivi de la position de lecture en proportion du document (pas
+ * de notion de "page" pour du texte continu), restaurée automatiquement à la
+ * réouverture. Si le proxy échoue pour une raison quelconque, on retombe sur
+ * l'URL d'origine directement (sans suivi automatique, mais la lecture reste
+ * possible). Un champ manuel permet de corriger la position dans tous les cas. */
+function LecteurHtml({ source, scrollRatio, onScrollRatioChange }) {
+  const iframeRef = useRef(null)
+  const [useProxy, setUseProxy] = useState(true)
+  const [pourcentageSaisi, setPourcentageSaisi] = useState(String(Math.round((scrollRatio || 0) * 100)))
+
+  useEffect(() => {
+    function handleMessage(e) {
+      if (e?.data?.source === 'parcours-lecture' && typeof e.data.scrollRatio === 'number') {
+        onScrollRatioChange(e.data.scrollRatio)
+      }
+    }
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [onScrollRatioChange])
+
+  const handleLoad = () => {
+    if (!useProxy) return
+    try {
+      const doc = iframeRef.current?.contentDocument
+      if (doc?.contentType && !doc.contentType.includes('html')) setUseProxy(false)
+    } catch {
+      // Accès bloqué (ne devrait pas arriver, servi depuis notre propre domaine) : on ignore.
+    }
+  }
+
+  return (
+    <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-ink-200 dark:border-ink-700 bg-white dark:bg-ink-800 dark:text-ink-50 flex-wrap text-sm">
+        <span className="text-ink-500 dark:text-ink-400">
+          {useProxy
+            ? `Position retenue automatiquement${scrollRatio ? ` (~${Math.round(scrollRatio * 100)}%)` : ''}`
+            : 'Mode simplifié — pas de suivi automatique'}
+        </span>
+        <div className="flex items-center gap-3">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              const n = Number(pourcentageSaisi)
+              if (n >= 0 && n <= 100) onScrollRatioChange(n / 100)
+            }}
+            className="flex items-center gap-1"
+          >
+            Corriger :
+            <input
+              type="number"
+              min="0"
+              max="100"
+              value={pourcentageSaisi}
+              onChange={(e) => setPourcentageSaisi(e.target.value)}
+              className="w-14 border border-ink-300 dark:border-ink-600 dark:bg-ink-900 rounded px-1 text-center"
+            />
+            %
+            <button type="submit" className="underline">OK</button>
+          </form>
+          <a href={source.url} target="_blank" rel="noreferrer" className="underline">
+            Ouvrir dans un nouvel onglet ↗
+          </a>
+        </div>
+      </div>
+      <iframe
+        ref={iframeRef}
+        src={useProxy ? proxyUrlFor(source.url, { scrollRatio: scrollRatio || 0 }) : source.url}
+        onLoad={handleLoad}
+        title={source.titreSource || 'Document'}
+        className="flex-1 w-full border-0 bg-white"
+      />
+    </div>
+  )
+}
+
 export default function ReaderPage() {
   const { parcoursId, livreId } = useParams()
   const parcours = useParcours(parcoursId)
   const livre = parcours?.livres.find((l) => l.id === livreId)
 
-  const { progress, setPageMarquee, setZoom, setSource, addNote, deleteNote } =
+  const { progress, setPageMarquee, setZoom, setScrollRatio, setSource, addNote, deleteNote } =
     useBookProgress(parcoursId, livreId)
 
   const [recherche, setRecherche] = useState(false)
@@ -231,11 +307,10 @@ export default function ReaderPage() {
         )}
 
         {progress.source?.url && (progress.source.type === 'html' || progress.source.type === 'texte') && (
-          <LecteurSimplifie
+          <LecteurHtml
             source={progress.source}
-            pageMarquee={progress.pageMarquee}
-            onPageMarqueeChange={setPageMarquee}
-            titreMode="Lecture intégrée"
+            scrollRatio={progress.scrollRatio}
+            onScrollRatioChange={setScrollRatio}
           />
         )}
 
@@ -269,7 +344,13 @@ export default function ReaderPage() {
           notes={progress.notes}
           onAddNote={addNote}
           onDeleteNote={deleteNote}
-          currentPage={progress.pageMarquee}
+          suggestionPortee={
+            progress.source?.type === 'pdf'
+              ? `Page ${progress.pageMarquee}`
+              : progress.source?.type === 'html' || progress.source?.type === 'texte'
+                ? `~${Math.round((progress.scrollRatio || 0) * 100)}%`
+                : undefined
+          }
         />
       </div>
     </div>

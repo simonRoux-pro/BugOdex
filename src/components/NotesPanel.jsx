@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 
-export default function NotesPanel({ notes, onAddNote, onDeleteNote, currentPage }) {
-  // La portée se cale par défaut sur la page où on en est réellement dans le
-  // document (synchronisée avec le marque-page), plutôt que sur un compteur
-  // de paragraphes déconnecté de la lecture réelle.
-  const suggestion = currentPage ? `Page ${currentPage}` : 'Résumé'
+export default function NotesPanel({ notes, onAddNote, onDeleteNote, suggestionPortee }) {
+  // La portée se cale par défaut sur où on en est réellement dans le document
+  // (marque-page ou position de lecture), plutôt que sur un compteur de
+  // paragraphes déconnecté de la lecture réelle.
+  const suggestion = suggestionPortee || 'Résumé'
 
   const [portee, setPortee] = useState(suggestion)
   const [texte, setTexte] = useState('')
